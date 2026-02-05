@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const { withTransaction } = require('../db/pg');
 const users = require('../db/repositories/userRepository');
+const ENABLE_FACTORY_RESET = process.env.ENABLE_FACTORY_RESET === 'true';
 
 const validateSetup = [
   body('nombre').trim().notEmpty(),
@@ -87,6 +88,9 @@ const { run: runMigrations } = require('../scripts/migrate');
 const { pool, dbPath } = require('../db/pg');
 
 async function resetDatabase(req, res) {
+  if (!ENABLE_FACTORY_RESET) {
+    return res.status(403).json({ error: 'Reset de base deshabilitado' });
+  }
   // Aquí idealmente verificaríamos que el usuario sea Admin desde middleware,
   // pero como es una ruta crítica, doble chequeamos o asumimos middleware previo.
   try {
@@ -122,4 +126,3 @@ module.exports = {
   createAdmin: [...validateSetup, createAdmin],
   resetDatabase,
 };
-

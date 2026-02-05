@@ -2,6 +2,20 @@ const { withTransaction, query } = require('../../db/pg');
 const inv = require('../../services/inventoryService');
 const marketplaceService = require('../../services/marketplaceService');
 
+function roundMoney(value) {
+  const n = Number(value) || 0;
+  return Math.round(n * 100) / 100;
+}
+
+function resolveCostoUnitario(product) {
+  const costoPesos = Number(product?.costo_pesos || 0);
+  if (costoPesos > 0) return costoPesos;
+  const costoDolares = Number(product?.costo_dolares || 0);
+  const tipoCambio = Number(product?.tipo_cambio || 0);
+  if (costoDolares > 0 && tipoCambio > 0) return costoDolares * tipoCambio;
+  return 0;
+}
+
 async function createVenta({
   cliente_id,
   fecha,
@@ -12,6 +26,7 @@ async function createVenta({
   es_reserva = false,
   usuario_id = null,
   referido_codigo,
+  caja_tipo,
 }) {
   return withTransaction(async (client) => {
     // Validate cliente
@@ -44,7 +59,13 @@ async function createVenta({
     }
     const productPlaceholders = uniqueIds.map((_, idx) => `$${idx + 1}`).join(', ');
     const { rows: products } = await client.query(
-      `SELECT p.id, p.nombre, p.precio_venta::float AS price
+      `SELECT p.id,
+              p.nombre,
+              p.precio_venta::float AS price,
+              p.comision_pct::float AS comision_pct,
+              p.precio_costo_pesos::float AS costo_pesos,
+              p.precio_costo_dolares::float AS costo_dolares,
+              p.tipo_cambio::float AS tipo_cambio
          FROM productos p
         WHERE p.id IN (${productPlaceholders})`,
       uniqueIds
@@ -59,13 +80,16 @@ async function createVenta({
     const isReserva = Boolean(es_reserva);
 
     // Calculate totals (validación de stock se hará al momento de entrega)
+    const preparedItems = [];
     let total = 0;
     for (const it of items) {
       const p = byId.get(Number(it.producto_id));
       if (!p) { const e = new Error(`Producto ${it.producto_id} inexistente`); e.status = 400; throw e; }
       const qty = Number(it.cantidad) || 0;
       const unitPrice = Number(it.precio_unitario) || p.price;
-      total += unitPrice * qty;
+      const subtotal = unitPrice * qty;
+      total += subtotal;
+      preparedItems.push({ raw: it, producto: p, cantidad: qty, precio_unitario: unitPrice, subtotal });
     }
     const baseDescuento = Number(descuento) || 0;
     const baseImpuestos = Number(impuestos) || 0;
@@ -83,6 +107,7 @@ async function createVenta({
       referidoComision = Number(referidoInfo.comision_monto || 0);
     }
 
+    const baseSinIvaTotal = Math.max(0, total - baseDescuento - referidoDescuento);
     const neto = total - baseDescuento - referidoDescuento + baseImpuestos;
 
     const resolvedDepositoId = await inv.resolveDepositoId(client, deposito_id);
@@ -112,21 +137,68 @@ async function createVenta({
       }
     }
 
+    let cajaTipoFinal = typeof caja_tipo === 'string' ? caja_tipo.trim().toLowerCase() : '';
+    if (!['home_office', 'sucursal'].includes(cajaTipoFinal)) {
+      cajaTipoFinal = '';
+    }
+    if (!cajaTipoFinal && usuario_id) {
+      const { rows: userRows } = await client.query(
+        'SELECT caja_tipo_default FROM usuarios WHERE id = $1',
+        [usuario_id]
+      );
+      const userCaja = userRows?.[0]?.caja_tipo_default;
+      if (typeof userCaja === 'string' && ['home_office', 'sucursal'].includes(userCaja)) {
+        cajaTipoFinal = userCaja;
+      }
+    }
+    if (!cajaTipoFinal) cajaTipoFinal = 'sucursal';
+
     const insVenta = await client.query(
-      `INSERT INTO ventas(cliente_id, fecha, total, descuento, impuestos, neto, estado_pago, deposito_id, es_reserva, usuario_id)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', $7, $8, $9) RETURNING id`,
-      [cliente_id, fecha || new Date(), total, baseDescuento, baseImpuestos, neto, resolvedDepositoId, isReserva ? 1 : 0, usuario_id]
+      `INSERT INTO ventas(cliente_id, fecha, total, descuento, impuestos, neto, estado_pago, deposito_id, es_reserva, usuario_id, caja_tipo)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', $7, $8, $9, $10) RETURNING id`,
+      [cliente_id, fecha || new Date(), total, baseDescuento, baseImpuestos, neto, resolvedDepositoId, isReserva ? 1 : 0, usuario_id, cajaTipoFinal]
     );
     const ventaId = insVenta.rows[0].id;
 
-    for (const it of items) {
-      const p = byId.get(Number(it.producto_id));
-      const qty = Number(it.cantidad) || 0;
-      const unitPrice = Number(it.precio_unitario) || p.price;
+    const baseTotalCents = Math.round(baseSinIvaTotal * 100);
+    let baseAcumuladaCents = 0;
+    for (let idx = 0; idx < preparedItems.length; idx += 1) {
+      const it = preparedItems[idx];
+      const p = it.producto;
+      const share = total > 0 ? it.subtotal / total : 0;
+      const isLast = idx === preparedItems.length - 1;
+      const baseLineaCents = isLast
+        ? baseTotalCents - baseAcumuladaCents
+        : Math.floor(baseTotalCents * share);
+      baseAcumuladaCents += baseLineaCents;
+      const baseLinea = baseLineaCents / 100;
+      const comisionPct = Number(p.comision_pct || 0);
+      const comisionMonto = roundMoney(baseLinea * (comisionPct / 100));
+      const costoUnit = roundMoney(resolveCostoUnitario(p));
       await client.query(
-        `INSERT INTO ventas_detalle(venta_id, producto_id, cantidad, precio_unitario, subtotal)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [ventaId, Number(p.id), qty, unitPrice, unitPrice * qty]
+        `INSERT INTO ventas_detalle(
+           venta_id,
+           producto_id,
+           cantidad,
+           precio_unitario,
+           subtotal,
+           base_sin_iva,
+           comision_pct,
+           comision_monto,
+           costo_unitario_pesos
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          ventaId,
+          Number(p.id),
+          it.cantidad,
+          it.precio_unitario,
+          it.subtotal,
+          baseLinea,
+          comisionPct,
+          comisionMonto,
+          costoUnit,
+        ]
       );
     }
 
@@ -179,7 +251,7 @@ async function listarVentas({ cliente_id, limit = 100, offset = 0 } = {}) {
 
   const sql = `SELECT v.id, v.cliente_id, c.nombre AS cliente_nombre, v.fecha, v.usuario_id,
                       v.total::float AS total, v.descuento::float AS descuento, v.impuestos::float AS impuestos,
-                      v.neto::float AS neto, v.estado_pago, v.estado_entrega, v.observaciones, v.oculto, v.es_reserva,
+                      v.neto::float AS neto, v.estado_pago, v.estado_entrega, v.caja_tipo, v.observaciones, v.oculto, v.es_reserva,
                       COALESCE(p.total_pagado, 0)::float AS total_pagado,
                       (v.neto - COALESCE(p.total_pagado, 0))::float AS saldo_pendiente
                  FROM ventas v
@@ -198,6 +270,14 @@ async function listarVentas({ cliente_id, limit = 100, offset = 0 } = {}) {
   return rows;
 }
 
+async function getVentaEntregaInfo(id) {
+  const { rows } = await query(
+    'SELECT id, estado_entrega, caja_tipo FROM ventas WHERE id = $1',
+    [id]
+  );
+  return rows[0] || null;
+}
+
 async function getVentaDetalle(id) {
   const { rows } = await query(
     `SELECT d.id, d.producto_id, p.nombre AS producto_nombre, d.cantidad, d.precio_unitario::float AS precio_unitario, d.subtotal::float AS subtotal
@@ -209,7 +289,7 @@ async function getVentaDetalle(id) {
   return rows;
 }
 
-module.exports = { createVenta, listarVentas, getVentaDetalle };
+module.exports = { createVenta, listarVentas, getVentaDetalle, getVentaEntregaInfo };
  
 async function entregarVenta(id) {
   return withTransaction(async (client) => {

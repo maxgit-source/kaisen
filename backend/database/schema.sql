@@ -20,15 +20,16 @@ CREATE TABLE IF NOT EXISTS roles (
 );
 
 CREATE TABLE IF NOT EXISTS usuarios (
-  id             BIGSERIAL PRIMARY KEY,
-  nombre         VARCHAR(100) NOT NULL,
-  email          VARCHAR(255) NOT NULL,
-  password_hash  TEXT NOT NULL,
-  rol_id         BIGINT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
-  activo         BOOLEAN NOT NULL DEFAULT TRUE,
-  creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+    id             BIGSERIAL PRIMARY KEY,
+    nombre         VARCHAR(100) NOT NULL,
+    email          VARCHAR(255) NOT NULL,
+    password_hash  TEXT NOT NULL,
+    rol_id         BIGINT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
+    activo         BOOLEAN NOT NULL DEFAULT TRUE,
+    caja_tipo_default VARCHAR(20) NOT NULL DEFAULT 'sucursal' CHECK (caja_tipo_default IN ('home_office','sucursal')),
+    creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 
 -- Case-insensitive unique email
 CREATE UNIQUE INDEX IF NOT EXISTS uq_usuarios_email_ci ON usuarios (LOWER(email));
@@ -91,29 +92,51 @@ CREATE INDEX IF NOT EXISTS ix_sync_queue_status ON sync_queue(status);
 CREATE INDEX IF NOT EXISTS ix_sync_queue_entity ON sync_queue(entity, entity_id);
 CREATE INDEX IF NOT EXISTS ix_sync_queue_created ON sync_queue(created_at);
 
--- 2.2 Clientes y proveedores
-CREATE TABLE IF NOT EXISTS clientes (
-  id              BIGSERIAL PRIMARY KEY,
-  nombre          VARCHAR(100) NOT NULL,
-  apellido        VARCHAR(100),
-  telefono        VARCHAR(50),
-  email           VARCHAR(255),
-  direccion       TEXT,
-  cuit_cuil       VARCHAR(20),
-  tipo_doc        VARCHAR(20),
-  nro_doc         VARCHAR(30),
-  condicion_iva   VARCHAR(40),
-  domicilio_fiscal TEXT,
-  provincia       VARCHAR(80),
-  localidad       VARCHAR(80),
-  codigo_postal   VARCHAR(20),
-  fecha_registro  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  estado          VARCHAR(20) NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo','inactivo'))
-);
-CREATE INDEX IF NOT EXISTS ix_clientes_nombre ON clientes(nombre);
-CREATE INDEX IF NOT EXISTS ix_clientes_apellido ON clientes(apellido);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_clientes_cuit ON clientes(cuit_cuil) WHERE cuit_cuil IS NOT NULL;
-
+  -- 2.2 Clientes y proveedores
+  -- Zonas de clientes
+  CREATE TABLE IF NOT EXISTS zonas (
+    id             BIGSERIAL PRIMARY KEY,
+    nombre         VARCHAR(100) NOT NULL UNIQUE,
+    color_hex      VARCHAR(16) NOT NULL DEFAULT '#64748B',
+    activo         BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS ix_zonas_activo ON zonas(activo);
+  
+  CREATE TABLE IF NOT EXISTS zonas_localidades (
+    id          BIGSERIAL PRIMARY KEY,
+    localidad   VARCHAR(120) NOT NULL,
+    zona_id     BIGINT NOT NULL REFERENCES zonas(id) ON DELETE CASCADE,
+    creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (localidad, zona_id)
+  );
+  CREATE INDEX IF NOT EXISTS ix_zonas_localidad ON zonas_localidades(localidad);
+  
+  CREATE TABLE IF NOT EXISTS clientes (
+    id              BIGSERIAL PRIMARY KEY,
+    nombre          VARCHAR(100) NOT NULL,
+    apellido        VARCHAR(100),
+    telefono        VARCHAR(50),
+    email           VARCHAR(255),
+    direccion       TEXT,
+    cuit_cuil       VARCHAR(20),
+    tipo_doc        VARCHAR(20),
+    nro_doc         VARCHAR(30),
+    condicion_iva   VARCHAR(40),
+    domicilio_fiscal TEXT,
+    provincia       VARCHAR(80),
+    localidad       VARCHAR(80),
+    codigo_postal   VARCHAR(20),
+    zona_id         BIGINT REFERENCES zonas(id) ON DELETE SET NULL,
+    fecha_registro  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    estado          VARCHAR(20) NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo','inactivo'))
+  );
+  CREATE INDEX IF NOT EXISTS ix_clientes_nombre ON clientes(nombre);
+  CREATE INDEX IF NOT EXISTS ix_clientes_apellido ON clientes(apellido);
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_clientes_cuit ON clientes(cuit_cuil) WHERE cuit_cuil IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS ix_clientes_zona ON clientes(zona_id);
+  
 -- Deudas iniciales (históricas) por cliente
 CREATE TABLE IF NOT EXISTS clientes_deudas_iniciales (
   id          BIGSERIAL PRIMARY KEY,
@@ -171,11 +194,13 @@ CREATE TABLE IF NOT EXISTS productos (
   precio_costo_pesos   DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (precio_costo_pesos >= 0),
   precio_costo_dolares DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (precio_costo_dolares >= 0),
   tipo_cambio          DECIMAL(12,4),
-  margen_local         DECIMAL(5,2) NOT NULL DEFAULT 0.15 CHECK (margen_local >= 0),
-  margen_distribuidor  DECIMAL(5,2) NOT NULL DEFAULT 0.45 CHECK (margen_distribuidor >= 0),
-  precio_local         DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (precio_local >= 0),
-  precio_distribuidor  DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (precio_distribuidor >= 0),
-  proveedor_id         BIGINT REFERENCES proveedores(id) ON DELETE SET NULL,
+    margen_local         DECIMAL(5,2) NOT NULL DEFAULT 0.15 CHECK (margen_local >= 0),
+    margen_distribuidor  DECIMAL(5,2) NOT NULL DEFAULT 0.45 CHECK (margen_distribuidor >= 0),
+    precio_local         DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (precio_local >= 0),
+    precio_distribuidor  DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (precio_distribuidor >= 0),
+    comision_pct         DECIMAL(5,2) NOT NULL DEFAULT 0 CHECK (comision_pct >= 0 AND comision_pct <= 100),
+    precio_modo          VARCHAR(10) NOT NULL DEFAULT 'auto' CHECK (precio_modo IN ('auto','manual')),
+    proveedor_id         BIGINT REFERENCES proveedores(id) ON DELETE SET NULL,
   stock_minimo   INTEGER NOT NULL DEFAULT 0 CHECK (stock_minimo >= 0),
   stock_maximo   INTEGER CHECK (stock_maximo IS NULL OR stock_maximo >= 0),
   reorden        INTEGER NOT NULL DEFAULT 0 CHECK (reorden >= 0),
@@ -342,26 +367,32 @@ CREATE TABLE IF NOT EXISTS ventas (
   impuestos    DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (impuestos >= 0),
   neto         DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (neto >= 0),
   estado_pago  VARCHAR(20) NOT NULL DEFAULT 'pendiente' CHECK (estado_pago IN ('pendiente','pagada','cancelado')),
-  estado_entrega VARCHAR(20) NOT NULL DEFAULT 'pendiente' CHECK (estado_entrega IN ('pendiente','entregado')),
-  fecha_entrega TIMESTAMPTZ,
-  observaciones TEXT,
-  deposito_id   BIGINT REFERENCES depositos(id) ON DELETE SET NULL,
-  usuario_id    BIGINT REFERENCES usuarios(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS ix_ventas_fecha ON ventas(fecha);
-CREATE INDEX IF NOT EXISTS ix_ventas_cliente ON ventas(cliente_id);
-CREATE INDEX IF NOT EXISTS ix_ventas_estado_entrega ON ventas(estado_entrega);
-CREATE INDEX IF NOT EXISTS ix_ventas_deposito ON ventas(deposito_id);
-CREATE INDEX IF NOT EXISTS ix_ventas_usuario ON ventas(usuario_id);
+    estado_entrega VARCHAR(20) NOT NULL DEFAULT 'pendiente' CHECK (estado_entrega IN ('pendiente','entregado')),
+    fecha_entrega TIMESTAMPTZ,
+    observaciones TEXT,
+    deposito_id   BIGINT REFERENCES depositos(id) ON DELETE SET NULL,
+    caja_tipo     VARCHAR(20) NOT NULL DEFAULT 'sucursal' CHECK (caja_tipo IN ('home_office','sucursal')),
+    usuario_id    BIGINT REFERENCES usuarios(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS ix_ventas_fecha ON ventas(fecha);
+  CREATE INDEX IF NOT EXISTS ix_ventas_cliente ON ventas(cliente_id);
+  CREATE INDEX IF NOT EXISTS ix_ventas_estado_entrega ON ventas(estado_entrega);
+  CREATE INDEX IF NOT EXISTS ix_ventas_deposito ON ventas(deposito_id);
+  CREATE INDEX IF NOT EXISTS ix_ventas_usuario ON ventas(usuario_id);
+  CREATE INDEX IF NOT EXISTS ix_ventas_caja_tipo ON ventas(caja_tipo);
 
 CREATE TABLE IF NOT EXISTS ventas_detalle (
   id              BIGSERIAL PRIMARY KEY,
   venta_id        BIGINT NOT NULL REFERENCES ventas(id) ON DELETE CASCADE,
-  producto_id     BIGINT NOT NULL REFERENCES productos(id) ON DELETE RESTRICT,
-  cantidad        INTEGER NOT NULL CHECK (cantidad > 0),
-  precio_unitario DECIMAL(12,2) NOT NULL CHECK (precio_unitario >= 0),
-  subtotal        DECIMAL(12,2) NOT NULL CHECK (subtotal >= 0)
-);
+    producto_id     BIGINT NOT NULL REFERENCES productos(id) ON DELETE RESTRICT,
+    cantidad        INTEGER NOT NULL CHECK (cantidad > 0),
+    precio_unitario DECIMAL(12,2) NOT NULL CHECK (precio_unitario >= 0),
+    subtotal        DECIMAL(12,2) NOT NULL CHECK (subtotal >= 0),
+    base_sin_iva    DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (base_sin_iva >= 0),
+    comision_pct    DECIMAL(5,2) NOT NULL DEFAULT 0 CHECK (comision_pct >= 0 AND comision_pct <= 100),
+    comision_monto  DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (comision_monto >= 0),
+    costo_unitario_pesos DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (costo_unitario_pesos >= 0)
+  );
 CREATE INDEX IF NOT EXISTS ix_ventas_detalle_venta ON ventas_detalle(venta_id);
 CREATE INDEX IF NOT EXISTS ix_ventas_detalle_producto ON ventas_detalle(producto_id);
 
@@ -378,6 +409,29 @@ CREATE INDEX IF NOT EXISTS ix_pagos_venta ON pagos(venta_id);
 CREATE INDEX IF NOT EXISTS ix_pagos_cliente ON pagos(cliente_id);
 CREATE INDEX IF NOT EXISTS ix_pagos_fecha ON pagos(fecha);
 
+-- Metodos de pago configurables + desglose por pago
+CREATE TABLE IF NOT EXISTS metodos_pago (
+  id            BIGSERIAL PRIMARY KEY,
+  nombre        VARCHAR(120) NOT NULL UNIQUE,
+  moneda        VARCHAR(5),
+  activo        BOOLEAN NOT NULL DEFAULT TRUE,
+  orden         INTEGER NOT NULL DEFAULT 0,
+  creado_en     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_metodos_pago_activo ON metodos_pago(activo);
+CREATE INDEX IF NOT EXISTS ix_metodos_pago_orden ON metodos_pago(orden);
+
+CREATE TABLE IF NOT EXISTS pagos_metodos (
+  id         BIGSERIAL PRIMARY KEY,
+  pago_id    BIGINT NOT NULL REFERENCES pagos(id) ON DELETE CASCADE,
+  metodo_id  BIGINT NOT NULL REFERENCES metodos_pago(id) ON DELETE RESTRICT,
+  monto      DECIMAL(12,2) NOT NULL CHECK (monto > 0),
+  moneda     VARCHAR(5)
+);
+CREATE INDEX IF NOT EXISTS ix_pagos_metodos_pago ON pagos_metodos(pago_id);
+CREATE INDEX IF NOT EXISTS ix_pagos_metodos_metodo ON pagos_metodos(metodo_id);
+
 CREATE TABLE IF NOT EXISTS pagos_proveedores (
   id            BIGSERIAL PRIMARY KEY,
   compra_id     BIGINT NOT NULL REFERENCES compras(id) ON DELETE CASCADE,
@@ -389,6 +443,48 @@ CREATE TABLE IF NOT EXISTS pagos_proveedores (
 CREATE INDEX IF NOT EXISTS ix_pagos_proveedores_compra ON pagos_proveedores(compra_id);
 CREATE INDEX IF NOT EXISTS ix_pagos_proveedores_proveedor ON pagos_proveedores(proveedor_id);
 CREATE INDEX IF NOT EXISTS ix_pagos_proveedores_fecha ON pagos_proveedores(fecha);
+
+-- 2.7.b Sueldos y comisiones de vendedores
+CREATE TABLE IF NOT EXISTS vendedores_comisiones (
+  id             BIGSERIAL PRIMARY KEY,
+  usuario_id     BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  periodo        VARCHAR(10) NOT NULL CHECK (periodo IN ('dia','semana','mes')),
+  porcentaje     DECIMAL(5,2) NOT NULL CHECK (porcentaje >= 0),
+  base_tipo      VARCHAR(20) NOT NULL DEFAULT 'bruto' CHECK (base_tipo IN ('bruto','neto')),
+  vigencia_desde DATE NOT NULL DEFAULT CURRENT_DATE,
+  vigencia_hasta DATE,
+  activo         BOOLEAN NOT NULL DEFAULT TRUE,
+  creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_vendedores_comisiones_usuario ON vendedores_comisiones(usuario_id);
+CREATE INDEX IF NOT EXISTS ix_vendedores_comisiones_periodo ON vendedores_comisiones(periodo);
+CREATE INDEX IF NOT EXISTS ix_vendedores_comisiones_vigencia ON vendedores_comisiones(vigencia_desde, vigencia_hasta);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vendedores_comisiones_activa ON vendedores_comisiones(usuario_id, periodo) WHERE activo = TRUE;
+
+CREATE TRIGGER set_updated_at_vendedores_comisiones
+BEFORE UPDATE ON vendedores_comisiones
+FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+CREATE TABLE IF NOT EXISTS vendedores_pagos (
+  id             BIGSERIAL PRIMARY KEY,
+  usuario_id     BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
+  periodo        VARCHAR(10) NOT NULL CHECK (periodo IN ('dia','semana','mes')),
+  desde          DATE NOT NULL,
+  hasta          DATE NOT NULL,
+  ventas_total   DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (ventas_total >= 0),
+  porcentaje     DECIMAL(5,2) NOT NULL DEFAULT 0 CHECK (porcentaje >= 0),
+  monto_calculado DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (monto_calculado >= 0),
+  monto_pagado   DECIMAL(12,2) NOT NULL CHECK (monto_pagado > 0),
+  fecha_pago     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metodo         VARCHAR(20),
+  notas          TEXT,
+  usuario_registro BIGINT REFERENCES usuarios(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS ix_vendedores_pagos_usuario ON vendedores_pagos(usuario_id);
+CREATE INDEX IF NOT EXISTS ix_vendedores_pagos_periodo ON vendedores_pagos(periodo);
+CREATE INDEX IF NOT EXISTS ix_vendedores_pagos_rango ON vendedores_pagos(desde, hasta);
+CREATE INDEX IF NOT EXISTS ix_vendedores_pagos_fecha ON vendedores_pagos(fecha_pago);
 
 CREATE TABLE IF NOT EXISTS facturas (
   id                  BIGSERIAL PRIMARY KEY,

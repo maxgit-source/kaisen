@@ -18,6 +18,7 @@ const validateCreateOrUpdate = [
   check('provincia').optional().isString(),
   check('localidad').optional().isString(),
   check('codigo_postal').optional().isString(),
+  check('zona_id').optional({ nullable: true }).isInt({ min: 1 }),
   check('tipo_cliente').optional().isIn(['minorista','mayorista','distribuidor']),
   check('segmento').optional().isString(),
   check('tags').optional().isString(),

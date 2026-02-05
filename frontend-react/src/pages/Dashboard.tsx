@@ -4,6 +4,8 @@ import { motion } from 'framer-motion';
 import MetricCard from '../ui/MetricCard';
 import ChartCard from '../ui/ChartCard';
 import Skeleton from '../ui/Skeleton';
+import { useLicense } from '../context/LicenseContext';
+import { hasFeature } from '../lib/features';
 import {
   LineChart,
   Line,
@@ -56,6 +58,8 @@ type InsightsResponse = {
 };
 
 export default function Dashboard() {
+  const { status: licenseStatus } = useLicense();
+  const aiEnabled = hasFeature(licenseStatus, 'ai');
   const [period, setPeriod] = useState<PeriodKey>('30d');
   const [customDesde, setCustomDesde] = useState<string>('');
   const [customHasta, setCustomHasta] = useState<string>('');
@@ -145,6 +149,12 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!aiEnabled) {
+      setInsights(null);
+      setInsightsLoading(false);
+      setInsightsError('Modulo de IA no habilitado en la licencia.');
+      return;
+    }
     (async () => {
       setInsightsLoading(true);
       setInsightsError(null);
@@ -158,7 +168,7 @@ export default function Dashboard() {
         setInsightsLoading(false);
       }
     })();
-  }, []);
+  }, [aiEnabled]);
 
   useEffect(() => {
     (async () => {

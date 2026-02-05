@@ -17,6 +17,7 @@ type Usuario = {
   email: string;
   rol?: string | null;
   activo?: boolean;
+  caja_tipo_default?: 'home_office' | 'sucursal';
 };
 
 type PerformanceRow = {
@@ -54,6 +55,7 @@ export default function Usuarios() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [activo, setActivo] = useState(true);
+  const [cajaTipoDefault, setCajaTipoDefault] = useState<'home_office' | 'sucursal'>('sucursal');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -145,6 +147,7 @@ export default function Usuarios() {
         email: email.trim(),
         activo,
         rol_id: vendedorRoleId,
+        caja_tipo_default: cajaTipoDefault,
       };
       if (password.trim()) {
         payload.password = password.trim();
@@ -186,6 +189,7 @@ export default function Usuarios() {
     setEmail(usuario.email || '');
     setPassword('');
     setActivo(normalizeActive(usuario.activo));
+    setCajaTipoDefault(usuario.caja_tipo_default === 'home_office' ? 'home_office' : 'sucursal');
     setSuccess(null);
     setError(null);
   }
@@ -196,6 +200,7 @@ export default function Usuarios() {
     setEmail('');
     setPassword('');
     setActivo(true);
+    setCajaTipoDefault('sucursal');
     setError(null);
     setSuccess(null);
   }
@@ -265,15 +270,27 @@ export default function Usuarios() {
               onChange={(e) => setPassword(e.target.value)}
               required={!editingId}
             />
-            <label className="inline-flex items-center gap-2 text-sm text-slate-200">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                checked={activo}
-                onChange={(e) => setActivo(e.target.checked)}
-              />
-              Activo
-            </label>
+              <label className="inline-flex items-center gap-2 text-sm text-slate-200">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  checked={activo}
+                  onChange={(e) => setActivo(e.target.checked)}
+                />
+                Activo
+              </label>
+
+              <label className="text-sm text-slate-200">
+                Caja por defecto
+                <select
+                  className="input-modern mt-2 w-full"
+                  value={cajaTipoDefault}
+                  onChange={(e) => setCajaTipoDefault(e.target.value as 'home_office' | 'sucursal')}
+                >
+                  <option value="sucursal">Sucursal</option>
+                  <option value="home_office">Home office</option>
+                </select>
+              </label>
 
             <div className="flex items-center gap-2">
               <Button type="submit" disabled={saving}>

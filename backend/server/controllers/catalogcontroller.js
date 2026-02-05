@@ -17,11 +17,38 @@ const CONFIG_KEYS = {
   priceType: 'catalogo_price_type',
 };
 
-const PRICE_TYPES = {
-  distribuidor: { key: 'price_local', label: 'Distribuidor' },
-  mayorista: { key: 'price_distribuidor', label: 'Mayorista' },
-  final: { key: 'precio_final', label: 'Final' },
+const PRICE_LABEL_KEYS = {
+  local: 'price_label_local',
+  distribuidor: 'price_label_distribuidor',
+  final: 'price_label_final',
 };
+
+const PRICE_LABEL_DEFAULTS = {
+  local: 'Precio Distribuidor',
+  distribuidor: 'Precio Mayorista',
+  final: 'Precio Final',
+};
+
+function buildPriceTypes(labels) {
+  return {
+    distribuidor: { key: 'price_local', label: labels.local },
+    mayorista: { key: 'price_distribuidor', label: labels.distribuidor },
+    final: { key: 'precio_final', label: labels.final },
+  };
+}
+
+async function getPriceLabels() {
+  const [local, distribuidor, finalLabel] = await Promise.all([
+    configRepo.getTextParam(PRICE_LABEL_KEYS.local),
+    configRepo.getTextParam(PRICE_LABEL_KEYS.distribuidor),
+    configRepo.getTextParam(PRICE_LABEL_KEYS.final),
+  ]);
+  return {
+    local: local || PRICE_LABEL_DEFAULTS.local,
+    distribuidor: distribuidor || PRICE_LABEL_DEFAULTS.distribuidor,
+    final: finalLabel || PRICE_LABEL_DEFAULTS.final,
+  };
+}
 
 function resolvePriceValue(product, priceKey) {
   const primary = Number(product?.[priceKey]);
@@ -202,6 +229,8 @@ async function getCatalogPublic(req, res) {
 
 async function exportCatalogExcel(req, res) {
   const rawType = String(req.query.price_type || req.query.tipo_precio || 'final').toLowerCase();
+  const labels = await getPriceLabels();
+  const PRICE_TYPES = buildPriceTypes(labels);
   const priceType = PRICE_TYPES[rawType] ? rawType : 'final';
   const priceConfig = PRICE_TYPES[priceType];
 

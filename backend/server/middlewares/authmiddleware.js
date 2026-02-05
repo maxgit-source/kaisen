@@ -1,12 +1,49 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const licenseService = require('../services/licenseService');
+const jwtBlacklistRepo = require('../db/repositories/jwtBlacklistRepository');
 
 // Claves y parametros JWT, desde variables de entorno
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.REFRESH_TOKEN_SECRET;
 const JWT_ALG = process.env.JWT_ALG || 'HS256';
 
-// Lista negra de tokens JWT invalidados (en memoria, para produccion real usar DB o Redis)
-const tokenBlacklist = new Set();
+// Lista negra de tokens JWT invalidados (memoria + DB)
+const tokenBlacklist = new Map();
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function decodeToken(token) {
+  try {
+    return jwt.decode(token) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function deriveJti(token, decoded) {
+  if (decoded && decoded.jti) return String(decoded.jti);
+  return hashToken(token);
+}
+
+function resolveExpiryMs(decoded) {
+  if (decoded && Number.isFinite(decoded.exp)) {
+    return Number(decoded.exp) * 1000;
+  }
+  return Date.now() + 24 * 60 * 60 * 1000;
+}
+
+function isBlacklistedLocal(token) {
+  const exp = tokenBlacklist.get(token);
+  if (!exp) return false;
+  if (Date.now() >= exp) {
+    tokenBlacklist.delete(token);
+    return false;
+  }
+  return true;
+}
 
 /**
  * Middleware para verificar el token JWT de acceso.
@@ -16,7 +53,7 @@ const tokenBlacklist = new Set();
  * @param {object} res - Objeto de respuesta de Express.
  * @param {function} next - Funcion para pasar el control al siguiente middleware.
  */
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Extraer el token del encabezado 'Bearer <token>'
 
@@ -30,18 +67,38 @@ function authMiddleware(req, res, next) {
     return res.status(500).json({ error: 'Configuracion del servidor incompleta.' });
   }
 
-  // Verificar si el token esta en la lista negra
-  if (tokenBlacklist.has(token)) {
+  // Verificar si el token esta en la lista negra (memoria/DB)
+  if (isBlacklistedLocal(token)) {
     return res.status(401).json({ error: 'Token invalido o revocado' });
   }
 
   try {
+    const decoded = decodeToken(token);
+    const jti = deriveJti(token, decoded);
+    const blacklisted = await jwtBlacklistRepo.isBlacklisted({ jti, token });
+    if (blacklisted) {
+      tokenBlacklist.set(token, resolveExpiryMs(decoded));
+      return res.status(401).json({ error: 'Token invalido o revocado' });
+    }
+
     const verifyOptions = { algorithms: [JWT_ALG] };
     if (process.env.JWT_ISSUER) verifyOptions.issuer = process.env.JWT_ISSUER;
     if (process.env.JWT_AUDIENCE) verifyOptions.audience = process.env.JWT_AUDIENCE;
     const user = jwt.verify(token, SECRET, verifyOptions); // Verificar el token con restricciones
     if (user && user.role === 'cliente') {
       return res.status(403).json({ error: 'Token de cliente no autorizado' });
+    }
+    let demoExpired = false;
+    try {
+      demoExpired = await licenseService.isDemoExpired();
+    } catch (licenseErr) {
+      console.error('Error validando licencia demo:', licenseErr?.message || licenseErr);
+      return res.status(500).json({ error: 'No se pudo validar la licencia' });
+    }
+    if (demoExpired) {
+      return res.status(403).json({
+        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
+      });
     }
     req.user = user; // Adjuntar info del usuario a la solicitud
     req.token = token; // Adjuntar el token actual para posible invalidacion
@@ -58,8 +115,17 @@ function authMiddleware(req, res, next) {
  * @param {string} token - El token JWT a invalidar.
  */
 function addTokenToBlacklist(token) {
-  tokenBlacklist.add(token);
-  // En produccion real se deberia persistir en un store externo y limpiar tras su expiracion original.
+  if (!token) return;
+  const decoded = decodeToken(token);
+  const jti = deriveJti(token, decoded);
+  const expMs = resolveExpiryMs(decoded);
+  tokenBlacklist.set(token, expMs);
+  jwtBlacklistRepo
+    .add({ jti, token, expires_at: new Date(expMs) })
+    .catch((err) => console.error('Blacklist persist error:', err?.message || err));
+  if (Math.random() < 0.05) {
+    jwtBlacklistRepo.cleanupExpired().catch(() => {});
+  }
 }
 
 module.exports = authMiddleware;

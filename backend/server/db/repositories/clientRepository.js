@@ -28,7 +28,7 @@ async function list({ q, estado, tipo_cliente, segmento, limit = 50, offset = 0,
   params.push(off);
   const sql = `SELECT id, nombre, apellido, telefono, email, direccion, cuit_cuil,
                       tipo_doc, nro_doc, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
-                      fecha_registro, estado, tipo_cliente, segmento, tags
+                      zona_id, fecha_registro, estado, tipo_cliente, segmento, tags
                  FROM clientes
                 ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                 ORDER BY id DESC
@@ -52,6 +52,7 @@ async function create({
   provincia,
   localidad,
   codigo_postal,
+  zona_id,
   estado = 'activo',
   tipo_cliente = 'minorista',
   segmento = null,
@@ -61,9 +62,9 @@ async function create({
     `INSERT INTO clientes(
         nombre, apellido, telefono, email, direccion, cuit_cuil,
         tipo_doc, nro_doc, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
-        estado, tipo_cliente, segmento, tags
+        zona_id, estado, tipo_cliente, segmento, tags
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      RETURNING id`,
     [
       nombre,
@@ -79,6 +80,7 @@ async function create({
       provincia || null,
       localidad || null,
       codigo_postal || null,
+      zona_id || null,
       estado,
       tipo_cliente || 'minorista',
       segmento || null,
@@ -128,6 +130,7 @@ async function update(id, fields) {
     provincia: 'provincia',
     localidad: 'localidad',
     codigo_postal: 'codigo_postal',
+    zona_id: 'zona_id',
     estado: 'estado',
     tipo_cliente: 'tipo_cliente',
     segmento: 'segmento',

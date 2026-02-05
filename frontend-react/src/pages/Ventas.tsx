@@ -4,6 +4,7 @@ import DataTable from '../ui/DataTable';
 import { Api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
+import { usePriceLabels } from '../lib/priceLabels';
 
 type Cliente = { id: number; nombre: string; apellido?: string };
 type Producto = {
@@ -30,6 +31,7 @@ type Venta = {
   neto: number;
   estado_pago: string;
   estado_entrega?: 'pendiente' | 'entregado';
+  caja_tipo?: 'home_office' | 'sucursal';
   oculto?: boolean;
   es_reserva?: boolean;
 };
@@ -85,6 +87,7 @@ export default function Ventas() {
   const { accessToken } = useAuth();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
   const canOverrideComprobante = role === 'admin' || role === 'gerente';
+  const { labels: priceLabels } = usePriceLabels();
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [productos, setProductos] = useState<Producto[]>([]);
@@ -102,6 +105,19 @@ export default function Ventas() {
     abierto: false,
     venta: null,
     items: [],
+    loading: false,
+    error: null,
+  });
+  const [remitoModal, setRemitoModal] = useState<{
+    abierto: boolean;
+    venta: Venta | null;
+    observaciones: string;
+    loading: boolean;
+    error: string | null;
+  }>({
+    abierto: false,
+    venta: null,
+    observaciones: '',
     loading: false,
     error: null,
   });
@@ -422,6 +438,58 @@ export default function Ventas() {
     }
   }
 
+  function canEntregarVenta(venta: Venta) {
+    if ((venta.estado_entrega || 'pendiente') !== 'pendiente') return false;
+    const caja = venta.caja_tipo || 'sucursal';
+    if (caja === 'home_office') {
+      return role === 'admin';
+    }
+    return true;
+  }
+
+  function abrirRemitoModal(venta: Venta) {
+    setRemitoModal({
+      abierto: true,
+      venta,
+      observaciones: '',
+      loading: false,
+      error: null,
+    });
+  }
+
+  function cerrarRemitoModal() {
+    setRemitoModal({
+      abierto: false,
+      venta: null,
+      observaciones: '',
+      loading: false,
+      error: null,
+    });
+  }
+
+  async function descargarRemitoPdf() {
+    if (!remitoModal.venta || remitoModal.loading) return;
+    setRemitoModal((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      const blob = await Api.descargarRemito(remitoModal.venta.id, remitoModal.observaciones);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `remito-${remitoModal.venta.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      cerrarRemitoModal();
+    } catch (e: any) {
+      setRemitoModal((prev) => ({
+        ...prev,
+        loading: false,
+        error: e?.message || 'No se pudo descargar el remito',
+      }));
+    }
+  }
+
   async function loadFactura(ventaId: number) {
     setFacturaLoading(true);
     setFacturaError(null);
@@ -658,16 +726,16 @@ export default function Ventas() {
               <div className="flex items-center gap-4 text-slate-300">
                 <label className="flex items-center gap-2">
                   <span className="text-slate-400">Tipo de Precio:</span>
-                  <select
-                    value={priceType}
-                    onChange={(e) => setPriceType(e.target.value as 'local' | 'distribuidor' | 'final')}
-                    className="bg-white/10 border border-white/10 rounded px-2 py-1 text-xs"
+                    <select
+                      value={priceType}
+                      onChange={(e) => setPriceType(e.target.value as 'local' | 'distribuidor' | 'final')}
+                      className="bg-white/10 border border-white/10 rounded px-2 py-1 text-xs"
                     >
-                     <option value="local">Precio Distribuidor</option>
-                     <option value="distribuidor">Precio Mayorista</option>
-                      <option value="final">Precio Final</option>
-                  </select>
-                </label>
+                      <option value="local">{priceLabels.local}</option>
+                      <option value="distribuidor">{priceLabels.distribuidor}</option>
+                      <option value="final">{priceLabels.final}</option>
+                    </select>
+                  </label>
               </div>
             </div>
 
@@ -791,7 +859,7 @@ export default function Ventas() {
                   >
                     Detalle
                   </button>
-                  {(v.estado_entrega || 'pendiente') === 'pendiente' && (
+                  {canEntregarVenta(v) && (
                     <button
                       onClick={async () => {
                         try {
@@ -806,7 +874,7 @@ export default function Ventas() {
                       Marcar entregado
                     </button>
                   )}
-                  {(v.estado_entrega || 'pendiente') === 'pendiente' && (
+                  {canEntregarVenta(v) && (
                     <button
                       onClick={() => cancelarVenta(v)}
                       className="px-2 py-1 rounded bg-rose-500/20 border border-rose-500/30 hover:bg-rose-500/30 text-rose-200 text-xs"
@@ -815,21 +883,7 @@ export default function Ventas() {
                     </button>
                   )}
                   <button
-                    onClick={async () => {
-                      try {
-                        const blob = await Api.descargarRemito(v.id);
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `remito-${v.id}.pdf`;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(url);
-                      } catch (e: any) {
-                        alert(e?.message || 'No se pudo descargar el remito');
-                      }
-                    }}
+                    onClick={() => abrirRemitoModal(v)}
                     className="px-2 py-1 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-xs"
                   >
                     Remito PDF
@@ -897,21 +951,7 @@ export default function Ventas() {
                   </button>
                   {v.estado_pago !== 'cancelado' && (
                     <button
-                      onClick={async () => {
-                        try {
-                          const blob = await Api.descargarRemito(v.id);
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = `remito-${v.id}.pdf`;
-                          document.body.appendChild(a);
-                          a.click();
-                          a.remove();
-                          URL.revokeObjectURL(url);
-                        } catch (e: any) {
-                          alert(e?.message || 'No se pudo descargar el remito');
-                        }
-                      }}
+                      onClick={() => abrirRemitoModal(v)}
                       className="px-2 py-1 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-xs"
                     >
                       Remito PDF
@@ -1123,6 +1163,64 @@ export default function Ventas() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {remitoModal.abierto && remitoModal.venta && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="bg-slate-900 rounded-2xl border border-white/10 shadow-xl w-full max-w-2xl p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-slate-400">Remito de entrega</div>
+                <div className="text-base text-slate-100">
+                  Venta #{remitoModal.venta.id} - {remitoModal.venta.cliente_nombre}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20 text-xs"
+                onClick={cerrarRemitoModal}
+                disabled={remitoModal.loading}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs text-slate-400">Observaciones (opcional)</label>
+              <textarea
+                className="input-modern w-full text-sm min-h-[100px]"
+                placeholder="Ej: Pago mitad efectivo, mitad transferencia."
+                value={remitoModal.observaciones}
+                onChange={(e) =>
+                  setRemitoModal((prev) => ({ ...prev, observaciones: e.target.value }))
+                }
+              />
+            </div>
+
+            {remitoModal.error && (
+              <div className="text-xs text-rose-300">{remitoModal.error}</div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                className="h-9 rounded-lg bg-white/5 border border-white/10 text-slate-200 px-4 text-sm"
+                onClick={cerrarRemitoModal}
+                disabled={remitoModal.loading}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="h-9 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={descargarRemitoPdf}
+                disabled={remitoModal.loading}
+              >
+                {remitoModal.loading ? 'Generando...' : 'Descargar PDF'}
+              </button>
             </div>
           </div>
         </div>

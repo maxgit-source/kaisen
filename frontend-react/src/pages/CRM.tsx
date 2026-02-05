@@ -4,6 +4,8 @@ import DataTable from '../ui/DataTable';
 import Skeleton from '../ui/Skeleton';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
+import { useLicense } from '../context/LicenseContext';
+import { hasFeature } from '../lib/features';
 import { Api } from '../lib/api';
 import {
   ResponsiveContainer,
@@ -25,6 +27,8 @@ type ActSortKey = keyof Pick<Actividad, 'tipo' | 'asunto' | 'cliente_nombre' | '
 type SortState<K extends string> = { key: K; dir: 'asc' | 'desc' };
 
 export default function CRM() {
+  const { status: licenseStatus } = useLicense();
+  const aiEnabled = hasFeature(licenseStatus, 'ai');
   const [fase, setFase] = useState<string>('');
   const [oportunidades, setOportunidades] = useState<Oportunidad[]>([]);
   const [actividades, setActividades] = useState<Actividad[]>([]);
@@ -65,6 +69,10 @@ export default function CRM() {
   const [analisis, setAnalisis] = useState<CrmAnalisis | null>(null);
   const [analisisLoading, setAnalisisLoading] = useState(false);
   const [analisisError, setAnalisisError] = useState<string | null>(null);
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [aiSuggestionError, setAiSuggestionError] = useState<string | null>(null);
+  const [aiSuggestionLoading, setAiSuggestionLoading] = useState(false);
+  const [aiOpp, setAiOpp] = useState<Oportunidad | null>(null);
 
   async function loadData(selectedPhase: string) {
     setLoading(true);
@@ -158,6 +166,25 @@ export default function CRM() {
       setActividades(acts || []);
     } catch (e: any) {
       setActError(e?.message || 'No se pudo crear la actividad');
+    }
+  }
+
+  async function generarSugerencia(o: Oportunidad) {
+    setAiSuggestionError(null);
+    setAiSuggestion(null);
+    setAiOpp(o);
+    if (!aiEnabled) {
+      setAiSuggestionError('IA no habilitada en la licencia.');
+      return;
+    }
+    setAiSuggestionLoading(true);
+    try {
+      const resp: any = await Api.crmSuggestion(o.id);
+      setAiSuggestion(resp?.suggestion || 'Sin sugerencia disponible.');
+    } catch (e: any) {
+      setAiSuggestionError(e?.message || 'No se pudo generar la sugerencia con IA');
+    } finally {
+      setAiSuggestionLoading(false);
     }
   }
 
@@ -260,14 +287,28 @@ export default function CRM() {
                 <td className="py-2 px-2">{o.probabilidad}%</td>
                 <td className="py-2 px-2">{o.fecha_cierre_estimada ? new Date(o.fecha_cierre_estimada).toLocaleDateString() : '-'}</td>
                 <td className="py-2 px-2">
-                  {(o.fase === 'ganado' || o.fase === 'perdido') && (
+                  <div className="flex flex-wrap gap-1">
                     <button
-                      onClick={() => ocultarOportunidad(o)}
-                      className="px-2 py-1 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-xs"
+                      onClick={() => generarSugerencia(o)}
+                      className={`px-2 py-1 rounded border text-xs ${
+                        aiEnabled
+                          ? 'bg-primary-500/20 border-primary-500/30 hover:bg-primary-500/30 text-primary-200'
+                          : 'bg-white/5 border-white/10 text-slate-500 cursor-not-allowed'
+                      }`}
+                      disabled={!aiEnabled}
+                      title={aiEnabled ? 'Generar sugerencia con IA' : 'IA no habilitada'}
                     >
-                      Ocultar
+                      Sugerencia IA
                     </button>
-                  )}
+                    {(o.fase === 'ganado' || o.fase === 'perdido') && (
+                      <button
+                        onClick={() => ocultarOportunidad(o)}
+                        className="px-2 py-1 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-xs"
+                      >
+                        Ocultar
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -276,6 +317,29 @@ export default function CRM() {
             )}
           </tbody>
         </DataTable>
+      </ChartCard>
+
+      <ChartCard title="Sugerencia IA">
+        {!aiEnabled && (
+          <div className="text-sm text-slate-400">
+            La IA esta disponible desde el plan Pro.
+          </div>
+        )}
+        {aiEnabled && (
+          <div className="space-y-2">
+            <div className="text-xs text-slate-400">
+              {aiOpp ? `Oportunidad: ${aiOpp.titulo}` : 'Selecciona una oportunidad y genera una sugerencia.'}
+            </div>
+            {aiSuggestionLoading && <div className="text-sm text-slate-300">Generando sugerencia...</div>}
+            {aiSuggestionError && <Alert kind="error" message={aiSuggestionError} />}
+            {!aiSuggestionLoading && !aiSuggestionError && aiSuggestion && (
+              <div className="text-sm text-slate-200 whitespace-pre-line">{aiSuggestion}</div>
+            )}
+            {!aiSuggestionLoading && !aiSuggestionError && !aiSuggestion && (
+              <div className="text-sm text-slate-500">Sin sugerencia aun.</div>
+            )}
+          </div>
+        )}
       </ChartCard>
 
       <ChartCard title="Actividades pendientes" right={

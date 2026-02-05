@@ -10,6 +10,7 @@ const validateCreate = [
   body('password').isLength({ min: 6 }),
   body('rol_id').isInt({ gt: 0 }),
   body('activo').optional().isBoolean(),
+  body('caja_tipo_default').optional().isIn(['home_office', 'sucursal']),
 ];
 
 async function list(req, res) {
@@ -47,6 +48,7 @@ async function create(req, res) {
       password_hash: hash,
       rol_id: req.body.rol_id,
       activo,
+      caja_tipo_default: req.body.caja_tipo_default,
     });
     res.status(201).json({ id: r.id });
   } catch (e) {
@@ -60,6 +62,7 @@ const validateUpdate = [
   body('rol_id').optional().isInt({ gt: 0 }),
   body('activo').optional().isBoolean(),
   body('password').optional().isLength({ min: 6 }),
+  body('caja_tipo_default').optional().isIn(['home_office', 'sucursal']),
 ];
 
 async function update(req, res) {

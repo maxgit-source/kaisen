@@ -9,6 +9,12 @@ export type LicenseStatus = {
   expires_at: string | null;
   install_id: string | null;
   reason: string | null;
+  license_type?: 'full' | 'demo';
+  demo_active?: boolean;
+  demo_started_at?: string | null;
+  demo_expires_at?: string | null;
+  demo_days_left?: number | null;
+  demo_days_total?: number | null;
 };
 
 type LicenseContextType = {

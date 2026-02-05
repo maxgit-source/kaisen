@@ -41,24 +41,72 @@ function loadPrivateKey() {
 function usage() {
   console.log('Uso: node generate-license.js <INSTALL_ID> [MAX_USERS] [EXPIRES_AT]');
   console.log('Ej:  node generate-license.js SG-ABCD-1K2L-Z9 5 2026-12-31');
+  console.log('Uso con plan: node generate-license.js <INSTALL_ID> --plan=pro --users=10 --expires=2026-12-31');
+  console.log('Planes: inicio, pro, full');
+  console.log('Features: por defecto todas. Para limitar usar LICENSE_FEATURES env.');
+  console.log('Ej:  set LICENSE_FEATURES=usuarios,arca,ai && node generate-license.js SG-ABCD-1K2L-Z9 5 2026-12-31');
 }
 
-const args = process.argv.slice(2);
-if (args.length < 1) {
+const rawArgs = process.argv.slice(2);
+if (rawArgs.length < 1) {
   usage();
   process.exit(1);
 }
 
-const installId = args[0];
-const maxUsers = args[1] ? Number(args[1]) : null;
-const expiresAt = args[2] ? String(args[2]) : null;
+function readArgValue(arg, next) {
+  if (arg && arg.includes('=')) {
+    return arg.split('=').slice(1).join('=');
+  }
+  return next || null;
+}
+
+const opts = {
+  installId: null,
+  maxUsers: null,
+  expiresAt: null,
+  plan: null,
+};
+
+for (let i = 0; i < rawArgs.length; i += 1) {
+  const arg = rawArgs[i];
+  if (arg.startsWith('--plan')) {
+    opts.plan = readArgValue(arg, rawArgs[i + 1]);
+    if (!arg.includes('=')) i += 1;
+    continue;
+  }
+  if (arg.startsWith('--users') || arg.startsWith('--max-users')) {
+    opts.maxUsers = readArgValue(arg, rawArgs[i + 1]);
+    if (!arg.includes('=')) i += 1;
+    continue;
+  }
+  if (arg.startsWith('--expires') || arg.startsWith('--expires-at')) {
+    opts.expiresAt = readArgValue(arg, rawArgs[i + 1]);
+    if (!arg.includes('=')) i += 1;
+    continue;
+  }
+  if (!opts.installId) {
+    opts.installId = arg;
+    continue;
+  }
+  if (opts.maxUsers == null) {
+    opts.maxUsers = arg;
+    continue;
+  }
+  if (!opts.expiresAt) {
+    opts.expiresAt = arg;
+  }
+}
+
+const installId = opts.installId;
+const maxUsers = opts.maxUsers != null ? Number(opts.maxUsers) : null;
+const expiresAt = opts.expiresAt ? String(opts.expiresAt) : null;
 
 if (!installId || installId.length < 6) {
   console.error('INSTALL_ID invalido');
   process.exit(1);
 }
 
-if (args[1] && !Number.isFinite(maxUsers)) {
+if (opts.maxUsers != null && !Number.isFinite(maxUsers)) {
   console.error('MAX_USERS invalido');
   process.exit(1);
 }
@@ -66,6 +114,71 @@ if (args[1] && !Number.isFinite(maxUsers)) {
 if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
   console.error('EXPIRES_AT invalido (use YYYY-MM-DD)');
   process.exit(1);
+}
+
+const ALL_FEATURES = [
+  'usuarios',
+  'arca',
+  'ai',
+  'marketplace',
+  'cloud',
+  'aprobaciones',
+  'crm',
+  'postventa',
+  'multideposito',
+];
+
+const PLAN_PRESETS = {
+  inicio: {
+    label: 'Inicio',
+    features: ['usuarios'],
+  },
+  pro: {
+    label: 'Pro',
+    features: ['usuarios', 'arca', 'ai', 'crm', 'postventa', 'aprobaciones'],
+  },
+  full: {
+    label: 'Full',
+    features: [...ALL_FEATURES],
+  },
+};
+
+function normalizePlanName(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase();
+}
+
+function parseFeatureList(raw, fallback) {
+  if (!raw) return fallback;
+  const list = String(raw)
+    .split(',')
+    .map((f) => f.trim())
+    .filter(Boolean);
+  return list.length ? list : fallback;
+}
+
+let planPreset = null;
+if (opts.plan) {
+  const planKey = normalizePlanName(opts.plan);
+  planPreset = PLAN_PRESETS[planKey] || null;
+  if (!planPreset) {
+    console.error(`PLAN invalido: ${opts.plan}`);
+    console.error(`Planes validos: ${Object.keys(PLAN_PRESETS).join(', ')}`);
+    process.exit(1);
+  }
+}
+
+const featuresFromEnv = parseFeatureList(process.env.LICENSE_FEATURES, null);
+let features = ALL_FEATURES;
+if (planPreset) {
+  features = planPreset.features;
+}
+if (featuresFromEnv && !planPreset) {
+  features = featuresFromEnv;
+}
+if (featuresFromEnv && planPreset) {
+  console.warn('LICENSE_FEATURES esta definido; se ignora porque usaste --plan.');
 }
 
 const privateKey = loadPrivateKey();
@@ -76,7 +189,7 @@ if (!privateKey) {
 
 const payload = {
   install_id: installId,
-  features: ['usuarios'],
+  features,
   max_users: maxUsers != null ? maxUsers : undefined,
   expires_at: expiresAt || undefined,
 };

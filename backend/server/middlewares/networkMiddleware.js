@@ -1,6 +1,7 @@
 const configRepo = require('../db/repositories/configRepository');
 
 const CACHE_TTL_MS = 30 * 1000;
+const DEFAULT_NETWORK_POLICY = process.env.DEFAULT_NETWORK_POLICY || 'off';
 let cachedPolicy = null;
 let cachedSubnet = null;
 let cachedAt = 0;
@@ -66,7 +67,7 @@ async function loadPolicy() {
   if (cachedAt && now - cachedAt < CACHE_TTL_MS) {
     return { policy: cachedPolicy, subnet: cachedSubnet };
   }
-  const policy = (await configRepo.getNetworkPolicy()) || 'off';
+  const policy = (await configRepo.getNetworkPolicy()) || DEFAULT_NETWORK_POLICY;
   const subnet = await configRepo.getNetworkSubnet();
   cachedPolicy = policy;
   cachedSubnet = subnet;
@@ -75,9 +76,9 @@ async function loadPolicy() {
 }
 
 function allowByPolicy(ip, policy, subnet) {
+  if (policy === 'off') return true;
   if (!ip) return false;
   if (ip === '127.0.0.1' || ip === '::1') return true;
-  if (policy === 'off') return true;
   if (policy === 'private') return isPrivateIpv4(ip);
   if (policy === 'subnet') return matchesSubnet(ip, subnet);
   return true;

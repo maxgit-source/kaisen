@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Api } from '../lib/api';
+import { usePriceLabels } from '../lib/priceLabels';
 import { uploadImageToCloudinary } from '../lib/cloudinary';
 import Alert from '../components/Alert';
 import Button from '../ui/Button';
@@ -14,6 +15,7 @@ type ProductoOption = {
 };
 
 export default function CatalogoAdmin() {
+  const { labels: priceLabels } = usePriceLabels();
   const SHOW_PUBLIC_CATALOGO = false;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -340,10 +342,10 @@ export default function CatalogoAdmin() {
                   setExcelPriceType(e.target.value as 'distribuidor' | 'mayorista' | 'final')
                 }
               >
-                <option value="distribuidor">Distribuidor</option>
-                <option value="mayorista">Mayorista</option>
-                <option value="final">Final</option>
-              </select>
+                    <option value="distribuidor">{priceLabels.local}</option>
+                    <option value="mayorista">{priceLabels.distribuidor}</option>
+                    <option value="final">{priceLabels.final}</option>
+                  </select>
             </div>
           </div>
 

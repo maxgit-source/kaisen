@@ -4,10 +4,22 @@ const repo = require('../db/repositories/paymentRepository');
 const validateCreate = [
   body('venta_id').optional({ nullable: true }).isInt({ gt: 0 }),
   body('cliente_id').isInt({ gt: 0 }),
-  body('monto').isFloat({ gt: 0 }),
+  body('monto').optional().isFloat({ gt: 0 }),
   body('metodo').optional().isIn(['efectivo', 'transferencia', 'tarjeta', 'otro']),
+  body('metodos').optional().isArray({ min: 1 }),
+  body('metodos.*.metodo_id').optional().isInt({ gt: 0 }),
+  body('metodos.*.monto').optional().isFloat({ gt: 0 }),
+  body('metodos.*.moneda').optional().isString().isLength({ max: 5 }),
   body('fecha').optional().isISO8601(),
   body('fecha_limite').optional().isISO8601(),
+  body().custom((_, { req }) => {
+    const hasMonto = Number(req.body?.monto) > 0;
+    const hasMetodos = Array.isArray(req.body?.metodos) && req.body.metodos.length > 0;
+    if (!hasMonto && !hasMetodos) {
+      throw new Error('monto o metodos es requerido');
+    }
+    return true;
+  }),
 ];
 
 async function create(req, res) {
@@ -29,6 +41,7 @@ async function list(req, res) {
       cliente_id: req.query.cliente_id,
       limit: req.query.limit,
       offset: req.query.offset,
+      include_metodos: String(req.query.include_metodos || '') === '1',
     });
     res.json(rows);
   } catch (e) {

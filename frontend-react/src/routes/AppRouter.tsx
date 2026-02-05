@@ -23,12 +23,30 @@ import Proveedores from '../pages/Proveedores';
 import Multideposito from '../pages/Multideposito';
 import Marketplace from '../pages/Marketplace';
 import Arca from '../pages/Arca';
+import SueldosVendedores from '../pages/SueldosVendedores';
+import RemitoRedirect from '../pages/RemitoRedirect';
 import { useAuth } from '../context/AuthContext';
+import { useLicense } from '../context/LicenseContext';
+import { FEATURE_LABELS, hasFeature, type FeatureKey } from '../lib/features';
+import ModuloNoHabilitado from '../pages/ModuloNoHabilitado';
 
 function Protected({ children }: { children: JSX.Element }) {
   const { isAuthenticated, ready } = useAuth();
   if (!ready) return null; // or a loader
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return children;
+}
+
+function FeatureGate({ feature, children }: { feature: FeatureKey; children: JSX.Element }) {
+  const { status, loading } = useLicense();
+  if (loading) {
+    return (
+      <div className="text-sm text-slate-400">Cargando licencia...</div>
+    );
+  }
+  if (!hasFeature(status, feature)) {
+    return <ModuloNoHabilitado featureLabel={FEATURE_LABELS[feature]} />;
+  }
   return children;
 }
 
@@ -54,20 +72,22 @@ function AppRoutes() {
           <Route path="ventas" element={<Page><Ventas /></Page>} />
           <Route path="compras" element={<Page><Compras /></Page>} />
           <Route path="proveedores" element={<Page><Proveedores /></Page>} />
-          <Route path="multideposito" element={<Page><Multideposito /></Page>} />
+          <Route path="multideposito" element={<Page><FeatureGate feature="multideposito"><Multideposito /></FeatureGate></Page>} />
           <Route path="categorias" element={<Page><Categorias /></Page>} />
           <Route path="catalogo" element={<Page><CatalogoAdmin /></Page>} />
           <Route path="stock" element={<Page><Stock /></Page>} />
           <Route path="finanzas" element={<Page><Finanzas /></Page>} />
           <Route path="informes" element={<Page><Informes /></Page>} />
-          <Route path="usuarios" element={<Page><Usuarios /></Page>} />
+          <Route path="usuarios" element={<Page><FeatureGate feature="usuarios"><Usuarios /></FeatureGate></Page>} />
+          <Route path="sueldos-vendedores" element={<Page><FeatureGate feature="usuarios"><SueldosVendedores /></FeatureGate></Page>} />
           <Route path="configuracion" element={<Page><ConfiguracionAdmin /></Page>} />
-          <Route path="predicciones" element={<Page><Predicciones /></Page>} />
-          <Route path="crm" element={<Page><CRM /></Page>} />
-          <Route path="postventa" element={<Page><Postventa /></Page>} />
-          <Route path="aprobaciones" element={<Page><Aprobaciones /></Page>} />
-          <Route path="marketplace" element={<Page><Marketplace /></Page>} />
-          <Route path="arca" element={<Page><Arca /></Page>} />
+          <Route path="predicciones" element={<Page><FeatureGate feature="ai"><Predicciones /></FeatureGate></Page>} />
+          <Route path="crm" element={<Page><FeatureGate feature="crm"><CRM /></FeatureGate></Page>} />
+          <Route path="postventa" element={<Page><FeatureGate feature="postventa"><Postventa /></FeatureGate></Page>} />
+          <Route path="aprobaciones" element={<Page><FeatureGate feature="aprobaciones"><Aprobaciones /></FeatureGate></Page>} />
+          <Route path="marketplace" element={<Page><FeatureGate feature="marketplace"><Marketplace /></FeatureGate></Page>} />
+          <Route path="arca" element={<Page><FeatureGate feature="arca"><Arca /></FeatureGate></Page>} />
+          <Route path="remitos/:id" element={<Page><RemitoRedirect /></Page>} />
         </Route>
         <Route path="/" element={<Navigate to="/app" replace />} />
         <Route path="*" element={<Navigate to="/app" replace />} />

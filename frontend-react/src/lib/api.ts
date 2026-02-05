@@ -178,6 +178,18 @@ export const Api = {
       method: 'PUT',
       body: JSON.stringify({ valor }),
     }),
+  getPriceLabels: () => apiFetch('/api/config/price-labels'),
+  setPriceLabels: (body: { local?: string; distribuidor?: string; final?: string }) =>
+    apiFetch('/api/config/price-labels', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  getRankingMetric: () => apiFetch('/api/config/ranking-vendedores'),
+  setRankingMetric: (valor: 'cantidad_ventas' | 'margen_venta') =>
+    apiFetch('/api/config/ranking-vendedores', {
+      method: 'PUT',
+      body: JSON.stringify({ valor }),
+    }),
   licenseStatus: () => apiFetch('/api/license/status'),
   activateLicense: (code: string) =>
     apiFetch('/api/license/activate', {
@@ -257,6 +269,33 @@ export const Api = {
       throw new Error(msg);
     }
     return await res.blob();
+  },
+  importarProductosExcel: async (
+    file: File,
+    opts: { dryRun?: boolean } = {}
+  ): Promise<any> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers['Authorization'] = `Bearer ${at}`;
+    const form = new FormData();
+    form.append('file', file);
+    const p = new URLSearchParams();
+    if (opts.dryRun) p.set('dry_run', '1');
+    const qs = p.toString();
+    const res = await fetch(apiUrl(`/api/productos/import${qs ? `?${qs}` : ''}`), {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+    if (!res.ok) {
+      let msg = 'No se pudo importar el archivo';
+      try {
+        const data = await res.json();
+        if (data?.error) msg = data.error;
+      } catch (_) { }
+      throw new Error(msg);
+    }
+    return await res.json();
   },
   productos: (params?: {
     q?: string;
@@ -395,6 +434,20 @@ export const Api = {
   pagos: (f?: { venta_id?: number; cliente_id?: number }) => apiFetch(`/api/pagos${f ? `?${new URLSearchParams(Object.entries(f as any))}` : ''}`),
   crearPago: (body: any) => apiFetch('/api/pagos', { method: 'POST', body: JSON.stringify(body) }),
 
+  // Metodos de pago
+  metodosPago: (opts: { inactivos?: boolean } = {}) => {
+    const qs = opts.inactivos ? '?inactivos=1' : '';
+    return apiFetch(`/api/metodos-pago${qs}`);
+  },
+  crearMetodoPago: (body: { nombre: string; moneda?: string | null; activo?: boolean; orden?: number }) =>
+    apiFetch('/api/metodos-pago', { method: 'POST', body: JSON.stringify(body) }),
+  actualizarMetodoPago: (
+    id: number,
+    body: { nombre?: string; moneda?: string | null; activo?: boolean; orden?: number }
+  ) =>
+    apiFetch(`/api/metodos-pago/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  eliminarMetodoPago: (id: number) => apiFetch(`/api/metodos-pago/${id}`, { method: 'DELETE' }),
+
   // Deudas iniciales de clientes
   clienteDeudasIniciales: (clienteId: number) =>
     apiFetch(`/api/clientes/${clienteId}/deudas-iniciales`),
@@ -416,6 +469,18 @@ export const Api = {
       body: JSON.stringify(body),
     }),
 
+  // Zonas
+  zonas: (opts: { inactivos?: boolean } = {}) => {
+    const qs = opts.inactivos ? '?inactivos=1' : '';
+    return apiFetch(`/api/zonas${qs}`);
+  },
+  crearZona: (body: { nombre: string; color_hex?: string; activo?: boolean }) =>
+    apiFetch('/api/zonas', { method: 'POST', body: JSON.stringify(body) }),
+  actualizarZona: (id: number, body: { nombre?: string; color_hex?: string; activo?: boolean }) =>
+    apiFetch(`/api/zonas/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  eliminarZona: (id: number) =>
+    apiFetch(`/api/zonas/${id}`, { method: 'DELETE' }),
+
   // Reportes
   deudas: () => apiFetch('/api/reportes/deudas'),
   gananciasMensuales: () => apiFetch('/api/reportes/ganancias-mensuales'),
@@ -427,15 +492,93 @@ export const Api = {
     const qs = p.toString();
     return apiFetch(`/api/reportes/movimientos${qs ? `?${qs}` : ''}`);
   },
+  movimientosResumen: (params: { desde?: string; hasta?: string; usuario_id?: number; deposito_id?: number; cliente_id?: number; proveedor_id?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (params.desde) p.set('desde', params.desde);
+    if (params.hasta) p.set('hasta', params.hasta);
+    if (params.usuario_id != null) p.set('usuario_id', String(params.usuario_id));
+    if (params.deposito_id != null) p.set('deposito_id', String(params.deposito_id));
+    if (params.cliente_id != null) p.set('cliente_id', String(params.cliente_id));
+    if (params.proveedor_id != null) p.set('proveedor_id', String(params.proveedor_id));
+    const qs = p.toString();
+    return apiFetch(`/api/reportes/movimientos-resumen${qs ? `?${qs}` : ''}`);
+  },
+  movimientosDetalle: (params: {
+    desde?: string;
+    hasta?: string;
+    usuario_id?: number;
+    deposito_id?: number;
+    cliente_id?: number;
+    proveedor_id?: number;
+    tipo?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const p = new URLSearchParams();
+    if (params.desde) p.set('desde', params.desde);
+    if (params.hasta) p.set('hasta', params.hasta);
+    if (params.usuario_id != null) p.set('usuario_id', String(params.usuario_id));
+    if (params.deposito_id != null) p.set('deposito_id', String(params.deposito_id));
+    if (params.cliente_id != null) p.set('cliente_id', String(params.cliente_id));
+    if (params.proveedor_id != null) p.set('proveedor_id', String(params.proveedor_id));
+    if (params.tipo) p.set('tipo', params.tipo);
+    if (params.limit != null) p.set('limit', String(params.limit));
+    if (params.offset != null) p.set('offset', String(params.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/reportes/movimientos-detalle${qs ? `?${qs}` : ''}`);
+  },
+  rankingVendedores: (params: { desde?: string; hasta?: string; usuario_id?: number; deposito_id?: number; caja_tipo?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (params.desde) p.set('desde', params.desde);
+    if (params.hasta) p.set('hasta', params.hasta);
+    if (params.usuario_id != null) p.set('usuario_id', String(params.usuario_id));
+    if (params.deposito_id != null) p.set('deposito_id', String(params.deposito_id));
+    if (params.caja_tipo) p.set('caja_tipo', String(params.caja_tipo));
+    const qs = p.toString();
+    return apiFetch(`/api/reportes/ranking-vendedores${qs ? `?${qs}` : ''}`);
+  },
+  movimientosDiaProductos: (params: { fecha?: string; desde?: string; hasta?: string; usuario_id?: number; deposito_id?: number; caja_tipo?: string; zona_id?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (params.fecha) p.set('fecha', params.fecha);
+    if (params.desde) p.set('desde', params.desde);
+    if (params.hasta) p.set('hasta', params.hasta);
+    if (params.usuario_id != null) p.set('usuario_id', String(params.usuario_id));
+    if (params.deposito_id != null) p.set('deposito_id', String(params.deposito_id));
+    if (params.caja_tipo) p.set('caja_tipo', String(params.caja_tipo));
+    if (params.zona_id != null) p.set('zona_id', String(params.zona_id));
+    const qs = p.toString();
+    return apiFetch(`/api/reportes/movimientos-dia-productos${qs ? `?${qs}` : ''}`);
+  },
+  descargarMovimientosExcel: async (params: { desde: string; hasta: string; zona_id?: number; usuario_id?: number; remito_base?: string }): Promise<Blob> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers['Authorization'] = `Bearer ${at}`;
+    const p = new URLSearchParams();
+    if (params.desde) p.set('desde', params.desde);
+    if (params.hasta) p.set('hasta', params.hasta);
+    if (params.zona_id != null) p.set('zona_id', String(params.zona_id));
+    if (params.usuario_id != null) p.set('usuario_id', String(params.usuario_id));
+    if (params.remito_base) p.set('remito_base', params.remito_base);
+    const qs = p.toString();
+    const res = await fetch(apiUrl(`/api/reportes/movimientos-ventas-excel${qs ? `?${qs}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    if (!res.ok) {
+      throw new Error('No se pudo descargar el excel de movimientos');
+    }
+    return await res.blob();
+  },
   stockBajo: () => apiFetch('/api/reportes/stock-bajo'),
   topClientes: (limit = 10) => apiFetch(`/api/reportes/top-clientes?limit=${limit}`),
   topProductosCliente: (clienteId: number, limit = 5) =>
     apiFetch(`/api/reportes/clientes/${clienteId}/top-productos?limit=${limit}`),
-  descargarRemito: async (ventaId: number): Promise<Blob> => {
+  descargarRemito: async (ventaId: number, observaciones?: string): Promise<Blob> => {
     const at = getAccessToken();
     const headers: Record<string, string> = {};
     if (at) headers['Authorization'] = `Bearer ${at}`;
-    const res = await fetch(apiUrl(`/api/reportes/remito/${ventaId}.pdf`), { method: 'GET', headers });
+    const qs = observaciones ? `?observaciones=${encodeURIComponent(observaciones)}` : '';
+    const res = await fetch(apiUrl(`/api/reportes/remito/${ventaId}.pdf${qs}`), { method: 'GET', headers });
     if (!res.ok) {
       throw new Error('No se pudo descargar el remito');
     }
@@ -637,6 +780,27 @@ export const Api = {
       body: JSON.stringify(body),
     });
   },
+  aiReportData: (opts: { desde?: string; hasta?: string; history?: number; forecast?: number; limit?: number; top?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.desde) p.set('desde', opts.desde);
+    if (opts.hasta) p.set('hasta', opts.hasta);
+    if (opts.history != null) p.set('history', String(opts.history));
+    if (opts.forecast != null) p.set('forecast', String(opts.forecast));
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.top != null) p.set('top', String(opts.top));
+    const qs = p.toString();
+    return apiFetch(`/api/ai/report-data${qs ? `?${qs}` : ''}`);
+  },
+  aiReportSummary: (body: { desde?: string; hasta?: string; history?: number; forecast?: number; limit?: number; top?: number } = {}) =>
+    apiFetch('/api/ai/report-summary', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  aiPredictionsSummary: (body: { days?: number; history?: number; limit?: number; category_id?: number } = {}) =>
+    apiFetch('/api/ai/predictions-summary', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   // CRM
   oportunidades: (f: { q?: string; fase?: string; cliente_id?: number; owner_id?: number; limit?: number; offset?: number } = {}) => {
@@ -739,6 +903,54 @@ export const Api = {
   marketplaceSyncExport: () => apiFetch('/api/marketplace/sync/export'),
   marketplaceSyncImport: (body: any) =>
     apiFetch('/api/marketplace/sync/import', { method: 'POST', body: JSON.stringify(body) }),
+
+  // Sueldos vendedores
+  vendedoresSueldos: (opts: { periodo?: 'dia' | 'semana' | 'mes'; desde?: string; hasta?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.periodo) p.set('periodo', opts.periodo);
+    if (opts.desde) p.set('desde', opts.desde);
+    if (opts.hasta) p.set('hasta', opts.hasta);
+    const qs = p.toString();
+    return apiFetch(`/api/vendedores/sueldos${qs ? `?${qs}` : ''}`);
+  },
+  vendedorVentas: (
+    vendedorId: number,
+    opts: { periodo?: 'dia' | 'semana' | 'mes'; desde?: string; hasta?: string; limit?: number; offset?: number } = {}
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.periodo) p.set('periodo', opts.periodo);
+    if (opts.desde) p.set('desde', opts.desde);
+    if (opts.hasta) p.set('hasta', opts.hasta);
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/vendedores/${vendedorId}/ventas${qs ? `?${qs}` : ''}`);
+  },
+  vendedorComision: (vendedorId: number, periodo?: 'dia' | 'semana' | 'mes') => {
+    const qs = periodo ? `?periodo=${encodeURIComponent(periodo)}` : '';
+    return apiFetch(`/api/vendedores/${vendedorId}/comision${qs}`);
+  },
+  setVendedorComision: (
+    vendedorId: number,
+    body: { periodo: 'dia' | 'semana' | 'mes'; porcentaje: number; vigencia_desde?: string; vigencia_hasta?: string; base_tipo?: 'bruto' | 'neto' }
+  ) => apiFetch(`/api/vendedores/${vendedorId}/comision`, { method: 'PUT', body: JSON.stringify(body) }),
+  vendedorPagos: (
+    vendedorId: number,
+    opts: { periodo?: 'dia' | 'semana' | 'mes'; desde?: string; hasta?: string; limit?: number; offset?: number } = {}
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.periodo) p.set('periodo', opts.periodo);
+    if (opts.desde) p.set('desde', opts.desde);
+    if (opts.hasta) p.set('hasta', opts.hasta);
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/vendedores/${vendedorId}/pagos${qs ? `?${qs}` : ''}`);
+  },
+  crearVendedorPago: (
+    vendedorId: number,
+    body: { periodo: 'dia' | 'semana' | 'mes'; desde: string; hasta: string; monto_pagado: number; metodo?: string; notas?: string }
+  ) => apiFetch(`/api/vendedores/${vendedorId}/pagos`, { method: 'POST', body: JSON.stringify(body) }),
 
   // Aprobaciones
   aprobaciones: (f: { estado?: 'pendiente' | 'aprobado' | 'rechazado'; limit?: number; offset?: number } = {}) => {

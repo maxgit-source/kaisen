@@ -128,7 +128,9 @@ async function boot() {
   process.env.JWT_SECRET = process.env.JWT_SECRET || secrets.jwtSecret;
   process.env.REFRESH_TOKEN_SECRET =
     process.env.REFRESH_TOKEN_SECRET || secrets.refreshSecret;
-  process.env.CORS_ALLOW_ALL = 'true';
+  process.env.CORS_ALLOW_NULL = 'true';
+  process.env.DEFAULT_NETWORK_POLICY =
+    process.env.DEFAULT_NETWORK_POLICY || 'private';
   process.env.NODE_ENV = app.isPackaged ? 'production' : 'development';
 
   await runMigrations(appRoot);

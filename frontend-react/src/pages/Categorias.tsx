@@ -13,7 +13,7 @@ export default function Categorias() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [form, setForm] = useState({ name: '', image_url: '', description: '' });
-  const canCreate = Boolean(form.name && form.image_url);
+  const canCreate = Boolean(form.name);
 
   async function load() {
     setLoading(true);
@@ -85,7 +85,7 @@ export default function Categorias() {
             />
             <input
               className="input-modern text-xs"
-              placeholder="URL imagen (se completa al subir)"
+              placeholder="URL imagen (opcional)"
               value={form.image_url}
               onChange={(e)=>setForm({...form, image_url: e.target.value})}
             />

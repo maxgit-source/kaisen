@@ -46,6 +46,8 @@ async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', 
            p.margen_distribuidor::float AS margen_distribuidor,
            p.precio_local::float AS price_local,
            p.precio_distribuidor::float AS price_distribuidor,
+           p.comision_pct::float AS comision_pct,
+           p.precio_modo AS precio_modo,
            p.precio_final::float AS precio_final,
            p.marca,
            p.modelo,
@@ -83,6 +85,8 @@ async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', 
            p.margen_distribuidor::float AS margen_distribuidor,
            p.precio_local::float AS price_local,
            p.precio_distribuidor::float AS price_distribuidor,
+           p.comision_pct::float AS comision_pct,
+           p.precio_modo AS precio_modo,
            p.precio_final::float AS precio_final,
            p.marca,
            p.modelo,
@@ -160,6 +164,8 @@ async function listProductsPaginated({ q, categoryId, page = 1, limit = 50, sort
            p.margen_distribuidor::float AS margen_distribuidor,
            p.precio_local::float AS price_local,
            p.precio_distribuidor::float AS price_distribuidor,
+           p.comision_pct::float AS comision_pct,
+           p.precio_modo AS precio_modo,
            p.precio_final::float AS precio_final,
            p.marca,
            p.modelo,
@@ -199,6 +205,8 @@ async function createProduct({
   name,
   description,
   price,
+  price_local,
+  price_distribuidor,
   codigo,
   image_url,
   category_id,
@@ -208,6 +216,8 @@ async function createProduct({
   tipo_cambio,
   margen_local,
   margen_distribuidor,
+  comision_pct,
+  precio_modo,
   proveedor_id,
   precio_final,
   marca,
@@ -257,17 +267,37 @@ async function createProduct({
 
   const margenLocal = typeof margen_local !== 'undefined' ? Number(margen_local) : 0.15;
   const margenDistribuidor = typeof margen_distribuidor !== 'undefined' ? Number(margen_distribuidor) : 0.45;
+  const comisionPct = typeof comision_pct !== 'undefined' ? Number(comision_pct) || 0 : 0;
   const categoryId = Number(category_id);
+  const priceMode = String(precio_modo || 'auto').toLowerCase() === 'manual' ? 'manual' : 'auto';
 
   const basePrecioVenta = Number(price);
-  const precioLocal =
+  const manualPrecioLocal = Number(price_local);
+  const manualPrecioDistribuidor = Number(price_distribuidor);
+  const hasManualLocal = Number.isFinite(manualPrecioLocal);
+  const hasManualDistribuidor = Number.isFinite(manualPrecioDistribuidor);
+
+  const computedPrecioLocal =
     costoPesosFinal > 0
       ? costoPesosFinal * (1 + margenLocal)
       : basePrecioVenta || 0;
-  const precioDistribuidor =
+  const computedPrecioDistribuidor =
     costoPesosFinal > 0
       ? costoPesosFinal * (1 + margenDistribuidor)
       : basePrecioVenta || 0;
+
+  const precioLocal =
+    priceMode === 'manual'
+      ? (hasManualLocal ? manualPrecioLocal : 0)
+      : computedPrecioLocal;
+  const precioDistribuidor =
+    priceMode === 'manual'
+      ? (hasManualDistribuidor ? manualPrecioDistribuidor : 0)
+      : computedPrecioDistribuidor;
+  const precioVentaFinal =
+    priceMode === 'manual'
+      ? (hasManualLocal ? manualPrecioLocal : basePrecioVenta || precioLocal || 0)
+      : computedPrecioLocal;
 
   return withTransaction(async (client) => {
     if (!Number.isFinite(categoryId) || categoryId <= 0) {
@@ -325,6 +355,8 @@ async function createProduct({
          margen_distribuidor,
          precio_local,
          precio_distribuidor,
+         comision_pct,
+         precio_modo,
          precio_final,
          marca,
          modelo,
@@ -337,7 +369,7 @@ async function createProduct({
          proveedor_id,
          activo
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, TRUE)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, TRUE)
        RETURNING id`,
       [
         categoryId,
@@ -345,7 +377,7 @@ async function createProduct({
         name,
         description || null,
         costoPesosFinal || 0,
-        precioLocal,
+        precioVentaFinal,
         costoPesosFinal || 0,
         costoDolaresFinal || 0,
         fx,
@@ -353,6 +385,8 @@ async function createProduct({
         margenDistribuidor,
         precioLocal,
         precioDistribuidor,
+        comisionPct,
+        priceMode,
         precio_final || 0,
         marca || null,
         modelo || null,
@@ -396,6 +430,8 @@ async function updateProduct(
     name,
     description,
     price,
+    price_local,
+    price_distribuidor,
     codigo,
     image_url,
     category_id,
@@ -405,6 +441,8 @@ async function updateProduct(
     tipo_cambio,
     margen_local,
     margen_distribuidor,
+    comision_pct,
+    precio_modo,
     proveedor_id,
     precio_final,
     marca,
@@ -444,7 +482,18 @@ async function updateProduct(
     }
 
     const { rows: currentRows } = await client.query(
-      'SELECT precio_costo_pesos, precio_costo_dolares, tipo_cambio, margen_local, margen_distribuidor FROM productos WHERE id = $1',
+      `SELECT precio_costo_pesos,
+              precio_costo_dolares,
+              tipo_cambio,
+              margen_local,
+              margen_distribuidor,
+              precio_modo,
+              precio_local,
+              precio_distribuidor,
+              precio_venta,
+              precio_final
+         FROM productos
+        WHERE id = $1`,
       [id]
     );
     if (!currentRows.length) {
@@ -488,6 +537,10 @@ async function updateProduct(
       typeof margen_distribuidor !== 'undefined'
         ? Number(margen_distribuidor)
         : Number(current.margen_distribuidor) || 0.45;
+    const priceMode =
+      typeof precio_modo !== 'undefined'
+        ? (String(precio_modo || '').toLowerCase() === 'manual' ? 'manual' : 'auto')
+        : (String(current.precio_modo || '').toLowerCase() === 'manual' ? 'manual' : 'auto');
 
     const sets = [];
     const params = [];
@@ -544,38 +597,70 @@ async function updateProduct(
       sets.push(`margen_distribuidor = $${p++}`);
       params.push(margenDistribuidor);
     }
-
-    let precioVentaFinal;
-    let precioLocalFinal;
-    let precioDistribuidorFinal;
-
-    if (typeof price !== 'undefined') {
-      precioVentaFinal = Number(price);
+    if (typeof comision_pct !== 'undefined') {
+      sets.push(`comision_pct = $${p++}`);
+      params.push(Number(comision_pct) || 0);
+    }
+    if (typeof precio_modo !== 'undefined') {
+      sets.push(`precio_modo = $${p++}`);
+      params.push(priceMode);
     }
 
-    if (costoPesosFinal > 0) {
-      precioLocalFinal = costoPesosFinal * (1 + margenLocal);
-      precioDistribuidorFinal = costoPesosFinal * (1 + margenDistribuidor);
-    } else if (typeof price !== 'undefined') {
-      precioLocalFinal = precioVentaFinal;
-      precioDistribuidorFinal = precioVentaFinal;
-    }
+    const manualLocal = Number(price_local);
+    const manualDistribuidor = Number(price_distribuidor);
+    const hasManualLocal = Number.isFinite(manualLocal);
+    const hasManualDistribuidor = Number.isFinite(manualDistribuidor);
+    const hasPrice = typeof price !== 'undefined' && Number.isFinite(Number(price));
 
-    if (typeof precioLocalFinal !== 'undefined' && typeof precioVentaFinal === 'undefined') {
-      precioVentaFinal = precioLocalFinal;
-    }
+    if (priceMode === 'manual') {
+      if (hasManualLocal) {
+        sets.push(`precio_local = $${p++}`);
+        params.push(manualLocal);
+      }
+      if (hasManualDistribuidor) {
+        sets.push(`precio_distribuidor = $${p++}`);
+        params.push(manualDistribuidor);
+      }
+      if (hasPrice) {
+        sets.push(`precio_venta = $${p++}`);
+        params.push(Number(price));
+      } else if (hasManualLocal) {
+        sets.push(`precio_venta = $${p++}`);
+        params.push(manualLocal);
+      }
+    } else {
+      let precioVentaFinal;
+      let precioLocalFinal;
+      let precioDistribuidorFinal;
 
-    if (typeof precioVentaFinal !== 'undefined') {
-      sets.push(`precio_venta = $${p++}`);
-      params.push(precioVentaFinal);
-    }
-    if (typeof precioLocalFinal !== 'undefined') {
-      sets.push(`precio_local = $${p++}`);
-      params.push(precioLocalFinal);
-    }
-    if (typeof precioDistribuidorFinal !== 'undefined') {
-      sets.push(`precio_distribuidor = $${p++}`);
-      params.push(precioDistribuidorFinal);
+      if (typeof price !== 'undefined') {
+        precioVentaFinal = Number(price);
+      }
+
+      if (costoPesosFinal > 0) {
+        precioLocalFinal = costoPesosFinal * (1 + margenLocal);
+        precioDistribuidorFinal = costoPesosFinal * (1 + margenDistribuidor);
+      } else if (typeof price !== 'undefined') {
+        precioLocalFinal = precioVentaFinal;
+        precioDistribuidorFinal = precioVentaFinal;
+      }
+
+      if (typeof precioLocalFinal !== 'undefined' && typeof precioVentaFinal === 'undefined') {
+        precioVentaFinal = precioLocalFinal;
+      }
+
+      if (typeof precioVentaFinal !== 'undefined') {
+        sets.push(`precio_venta = $${p++}`);
+        params.push(precioVentaFinal);
+      }
+      if (typeof precioLocalFinal !== 'undefined') {
+        sets.push(`precio_local = $${p++}`);
+        params.push(precioLocalFinal);
+      }
+      if (typeof precioDistribuidorFinal !== 'undefined') {
+        sets.push(`precio_distribuidor = $${p++}`);
+        params.push(precioDistribuidorFinal);
+      }
     }
 
     if (typeof proveedor_id !== 'undefined') {
@@ -629,9 +714,11 @@ async function listCatalog() {
             p.nombre AS name,
             p.descripcion AS description,
             p.precio_venta::float AS price,
-            p.precio_local::float AS price_local,
-            p.precio_distribuidor::float AS price_distribuidor,
-            p.precio_final::float AS precio_final,
+           p.precio_local::float AS price_local,
+           p.precio_distribuidor::float AS price_distribuidor,
+           p.comision_pct::float AS comision_pct,
+           p.precio_modo AS precio_modo,
+           p.precio_final::float AS precio_final,
             p.marca,
             p.modelo,
             p.procesador,
@@ -659,9 +746,11 @@ async function listCatalogExport() {
             p.nombre AS name,
             p.descripcion AS description,
             p.precio_venta::float AS price,
-            p.precio_local::float AS price_local,
-            p.precio_distribuidor::float AS price_distribuidor,
-            p.precio_final::float AS precio_final,
+           p.precio_local::float AS price_local,
+           p.precio_distribuidor::float AS price_distribuidor,
+           p.comision_pct::float AS comision_pct,
+           p.precio_modo AS precio_modo,
+           p.precio_final::float AS precio_final,
             c.nombre AS category_name,
             (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
        FROM productos p
@@ -681,9 +770,10 @@ async function findById(id) {
             p.nombre AS name,
             p.descripcion AS description,
             p.precio_venta::float AS price,
-            p.precio_local::float AS price_local,
-            p.precio_distribuidor::float AS price_distribuidor,
-            p.precio_final::float AS precio_final,
+           p.precio_local::float AS price_local,
+           p.precio_distribuidor::float AS price_distribuidor,
+           p.precio_modo AS precio_modo,
+           p.precio_final::float AS precio_final,
             p.marca,
             p.modelo,
             p.procesador,
@@ -719,9 +809,10 @@ async function findByCodigo(codigo) {
             p.tipo_cambio::float AS tipo_cambio,
             p.margen_local::float AS margen_local,
             p.margen_distribuidor::float AS margen_distribuidor,
-            p.precio_local::float AS price_local,
-            p.precio_distribuidor::float AS price_distribuidor,
-            p.precio_final::float AS precio_final,
+           p.precio_local::float AS price_local,
+           p.precio_distribuidor::float AS price_distribuidor,
+           p.precio_modo AS precio_modo,
+           p.precio_final::float AS precio_final,
             p.marca,
             p.modelo,
             p.procesador,
@@ -742,6 +833,19 @@ async function findByCodigo(codigo) {
     [cod]
   );
   return rows[0] || null;
+}
+
+async function findByNameCategory(name, categoryId) {
+  const { rows } = await query(
+    `SELECT id
+       FROM productos
+      WHERE LOWER(nombre) = LOWER($1)
+        AND categoria_id = $2
+        AND activo = TRUE
+      LIMIT 1`,
+    [name, categoryId]
+  );
+  return rows[0]?.id || null;
 }
 
 async function getProductHistory(productId, { limit = 50, offset = 0 } = {}) {
@@ -780,6 +884,7 @@ module.exports = {
   listCatalogExport,
   findById,
   findByCodigo,
+  findByNameCategory,
   createProduct,
   updateProduct,
   deactivateProduct,

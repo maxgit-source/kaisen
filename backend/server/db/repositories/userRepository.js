@@ -3,6 +3,7 @@ const { query } = require('../../db/pg');
 async function findByEmail(email) {
   const { rows } = await query(
     `SELECT u.id, u.nombre, u.email, u.password_hash, u.rol_id, u.activo,
+            u.caja_tipo_default,
             r.nombre AS rol
        FROM usuarios u
   LEFT JOIN roles r ON r.id = u.rol_id
@@ -15,7 +16,7 @@ async function findByEmail(email) {
 
 async function findById(id) {
   const { rows } = await query(
-    `SELECT u.id, u.nombre, u.email, u.rol_id, u.activo, r.nombre AS rol
+    `SELECT u.id, u.nombre, u.email, u.rol_id, u.activo, u.caja_tipo_default, r.nombre AS rol
        FROM usuarios u
   LEFT JOIN roles r ON r.id = u.rol_id
       WHERE u.id = $1`,
@@ -33,7 +34,7 @@ async function list({ q, activo, limit = 100, offset = 0 } = {}) {
   const off = Math.max(parseInt(offset, 10) || 0, 0);
   params.push(lim); params.push(off);
   const { rows } = await query(
-    `SELECT u.id, u.nombre, u.email, u.activo, r.nombre AS rol
+    `SELECT u.id, u.nombre, u.email, u.activo, u.caja_tipo_default, r.nombre AS rol
        FROM usuarios u
   LEFT JOIN roles r ON r.id = u.rol_id
       ${where.length? 'WHERE ' + where.join(' AND ') : ''}
@@ -44,12 +45,12 @@ async function list({ q, activo, limit = 100, offset = 0 } = {}) {
   return rows;
 }
 
-async function create({ nombre, email, password_hash, rol_id, activo = true }) {
+async function create({ nombre, email, password_hash, rol_id, activo = true, caja_tipo_default = 'sucursal' }) {
   const { rows } = await query(
-    `INSERT INTO usuarios(nombre, email, password_hash, rol_id, activo)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO usuarios(nombre, email, password_hash, rol_id, activo, caja_tipo_default)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
-    [nombre, email, password_hash, rol_id, !!activo]
+    [nombre, email, password_hash, rol_id, !!activo, caja_tipo_default || 'sucursal']
   );
   return rows[0];
 }
@@ -58,7 +59,7 @@ async function update(id, fields) {
   const sets = [];
   const params = [];
   let p = 1;
-  for (const [key, col] of Object.entries({ nombre:'nombre', email:'email', rol_id:'rol_id', activo:'activo' })) {
+  for (const [key, col] of Object.entries({ nombre:'nombre', email:'email', rol_id:'rol_id', activo:'activo', caja_tipo_default:'caja_tipo_default' })) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {
       sets.push(`${col} = $${p++}`);
       params.push(fields[key]);

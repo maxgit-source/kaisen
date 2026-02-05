@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Api, apiFetch } from '../lib/api';
 import Alert from '../components/Alert';
 import { useLicense } from '../context/LicenseContext';
+import { FEATURE_LIST, hasFeature } from '../lib/features';
 
 export default function ConfiguracionAdmin() {
   const { status: licenseStatus, loading: licenseLoading, refresh: refreshLicense } = useLicense();
@@ -53,6 +54,32 @@ export default function ConfiguracionAdmin() {
   const [backupError, setBackupError] = useState<string | null>(null);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
   const [factoryResetting, setFactoryResetting] = useState(false);
+  const [priceLabels, setPriceLabels] = useState({ local: '', distribuidor: '', final: '' });
+  const [priceLabelsLoading, setPriceLabelsLoading] = useState(false);
+  const [priceLabelsSaving, setPriceLabelsSaving] = useState(false);
+  const [priceLabelsError, setPriceLabelsError] = useState<string | null>(null);
+  const [priceLabelsSuccess, setPriceLabelsSuccess] = useState<string | null>(null);
+  const [rankingMetric, setRankingMetric] = useState<'cantidad_ventas' | 'margen_venta'>('cantidad_ventas');
+  const [rankingLoading, setRankingLoading] = useState(false);
+  const [rankingSaving, setRankingSaving] = useState(false);
+  const [rankingError, setRankingError] = useState<string | null>(null);
+  const [rankingSuccess, setRankingSuccess] = useState<string | null>(null);
+  const [zonas, setZonas] = useState<any[]>([]);
+  const [zonasLoading, setZonasLoading] = useState(false);
+  const [zonasError, setZonasError] = useState<string | null>(null);
+  const [zonasSuccess, setZonasSuccess] = useState<string | null>(null);
+  const [zonaSaving, setZonaSaving] = useState(false);
+  const [zonaForm, setZonaForm] = useState({ nombre: '', color_hex: '#64748B' });
+  const [metodosPago, setMetodosPago] = useState<any[]>([]);
+  const [metodosLoading, setMetodosLoading] = useState(false);
+  const [metodosError, setMetodosError] = useState<string | null>(null);
+  const [metodosSuccess, setMetodosSuccess] = useState<string | null>(null);
+  const [showMetodosInactivos, setShowMetodosInactivos] = useState(false);
+  const [metodoForm, setMetodoForm] = useState({ nombre: '', moneda: 'ARS', orden: '0' });
+  const [metodoSaving, setMetodoSaving] = useState(false);
+  const [editMetodoId, setEditMetodoId] = useState<number | null>(null);
+  const [editMetodoForm, setEditMetodoForm] = useState({ nombre: '', moneda: '', orden: '', activo: true });
+  const cloudEnabled = hasFeature(licenseStatus, 'cloud');
 
   useEffect(() => {
     let mounted = true;
@@ -99,6 +126,94 @@ export default function ConfiguracionAdmin() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    (async () => {
+      setPriceLabelsLoading(true);
+      setPriceLabelsError(null);
+      try {
+        const data = await Api.getPriceLabels();
+        if (!active) return;
+        setPriceLabels({
+          local: data?.local || 'Precio Distribuidor',
+          distribuidor: data?.distribuidor || 'Precio Mayorista',
+          final: data?.final || 'Precio Final',
+        });
+      } catch (e) {
+        if (!active) return;
+        setPriceLabelsError(
+          e instanceof Error ? e.message : 'No se pudieron cargar los nombres de precios'
+        );
+      } finally {
+        if (active) setPriceLabelsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function loadMetodosPago() {
+    setMetodosLoading(true);
+    setMetodosError(null);
+    try {
+      const rows = await Api.metodosPago({ inactivos: showMetodosInactivos });
+      setMetodosPago(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setMetodosError(
+        e instanceof Error ? e.message : 'No se pudieron cargar los metodos de pago'
+      );
+      setMetodosPago([]);
+    } finally {
+      setMetodosLoading(false);
+    }
+  }
+
+  async function loadRankingMetric() {
+    setRankingLoading(true);
+    setRankingError(null);
+    try {
+      const data = await Api.getRankingMetric();
+      const valor = data?.valor === 'margen_venta' ? 'margen_venta' : 'cantidad_ventas';
+      setRankingMetric(valor);
+    } catch (e) {
+      setRankingError(
+        e instanceof Error ? e.message : 'No se pudo cargar la metrica de ranking'
+      );
+    } finally {
+      setRankingLoading(false);
+    }
+  }
+
+  async function loadZonas() {
+    setZonasLoading(true);
+    setZonasError(null);
+    try {
+      const rows = await Api.zonas({ inactivos: true });
+      const parsed = Array.isArray(rows)
+        ? rows.map((z: any) => ({
+            ...z,
+            activo: z.activo === undefined ? true : Boolean(z.activo),
+          }))
+        : [];
+      setZonas(parsed);
+    } catch (e) {
+      setZonasError(e instanceof Error ? e.message : 'No se pudieron cargar las zonas');
+      setZonas([]);
+    } finally {
+      setZonasLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadMetodosPago();
+  }, [showMetodosInactivos]);
+
+  useEffect(() => {
+    loadRankingMetric();
+    loadZonas();
+  }, []);
+
+  useEffect(() => {
     (async () => {
       setUsuariosLoading(true);
       setUsuariosError(null);
@@ -142,6 +257,15 @@ export default function ConfiguracionAdmin() {
 
   useEffect(() => {
     let active = true;
+    if (!cloudEnabled) {
+      setCloudStatus(null);
+      setCloudEndpoint('');
+      setCloudLoading(false);
+      setCloudError('Modulo cloud no habilitado en la licencia');
+      return () => {
+        active = false;
+      };
+    }
     (async () => {
       setCloudLoading(true);
       setCloudError(null);
@@ -160,7 +284,7 @@ export default function ConfiguracionAdmin() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [cloudEnabled]);
 
   useEffect(() => {
     let active = true;
@@ -257,6 +381,191 @@ export default function ConfiguracionAdmin() {
     }
   }
 
+  async function onSavePriceLabels(e: FormEvent) {
+    e.preventDefault();
+    setPriceLabelsError(null);
+    setPriceLabelsSuccess(null);
+    if (!priceLabels.local.trim() || !priceLabels.distribuidor.trim() || !priceLabels.final.trim()) {
+      setPriceLabelsError('Completa los tres nombres de precios');
+      return;
+    }
+    setPriceLabelsSaving(true);
+    try {
+      await Api.setPriceLabels({
+        local: priceLabels.local.trim(),
+        distribuidor: priceLabels.distribuidor.trim(),
+        final: priceLabels.final.trim(),
+      });
+      setPriceLabelsSuccess('Nombres de precios actualizados');
+    } catch (e) {
+      setPriceLabelsError(
+        e instanceof Error ? e.message : 'No se pudieron guardar los nombres de precios'
+      );
+    } finally {
+      setPriceLabelsSaving(false);
+    }
+  }
+
+  async function onSaveRankingMetric(e: FormEvent) {
+    e.preventDefault();
+    setRankingError(null);
+    setRankingSuccess(null);
+    setRankingSaving(true);
+    try {
+      await Api.setRankingMetric(rankingMetric);
+      setRankingSuccess('Metrica de ranking actualizada');
+    } catch (e) {
+      setRankingError(
+        e instanceof Error ? e.message : 'No se pudo guardar la metrica'
+      );
+    } finally {
+      setRankingSaving(false);
+    }
+  }
+
+  async function onCreateZona(e: FormEvent) {
+    e.preventDefault();
+    setZonasError(null);
+    setZonasSuccess(null);
+    const nombre = zonaForm.nombre.trim();
+    if (!nombre) {
+      setZonasError('Ingresa un nombre para la zona');
+      return;
+    }
+    setZonaSaving(true);
+    try {
+      await Api.crearZona({
+        nombre,
+        color_hex: zonaForm.color_hex || '#64748B',
+        activo: true,
+      });
+      setZonaForm({ nombre: '', color_hex: '#64748B' });
+      setZonasSuccess('Zona creada');
+      await loadZonas();
+    } catch (e) {
+      setZonasError(e instanceof Error ? e.message : 'No se pudo crear la zona');
+    } finally {
+      setZonaSaving(false);
+    }
+  }
+
+  function updateZonaField(id: number, changes: Partial<any>) {
+    setZonas((prev) => prev.map((z) => (Number(z.id) === id ? { ...z, ...changes } : z)));
+  }
+
+  async function saveZona(id: number) {
+    const zona = zonas.find((z) => Number(z.id) === id);
+    if (!zona) return;
+    const nombre = String(zona.nombre || '').trim();
+    if (!nombre) {
+      setZonasError('El nombre de la zona es requerido');
+      return;
+    }
+    setZonasError(null);
+    setZonasSuccess(null);
+    setZonaSaving(true);
+    try {
+      await Api.actualizarZona(id, {
+        nombre,
+        color_hex: zona.color_hex || '#64748B',
+        activo: Boolean(zona.activo),
+      });
+      setZonasSuccess('Zona actualizada');
+      await loadZonas();
+    } catch (e) {
+      setZonasError(e instanceof Error ? e.message : 'No se pudo actualizar la zona');
+    } finally {
+      setZonaSaving(false);
+    }
+  }
+
+  async function onCreateMetodoPago(e: FormEvent) {
+    e.preventDefault();
+    setMetodosError(null);
+    setMetodosSuccess(null);
+    const nombre = metodoForm.nombre.trim();
+    if (!nombre) {
+      setMetodosError('Ingresa un nombre de metodo');
+      return;
+    }
+    const ordenNum = Number(metodoForm.orden || 0);
+    setMetodoSaving(true);
+    try {
+      await Api.crearMetodoPago({
+        nombre,
+        moneda: metodoForm.moneda?.trim() || null,
+        orden: Number.isFinite(ordenNum) ? ordenNum : 0,
+        activo: true,
+      });
+      setMetodoForm({ nombre: '', moneda: metodoForm.moneda || 'ARS', orden: '0' });
+      setMetodosSuccess('Metodo creado');
+      await loadMetodosPago();
+    } catch (e) {
+      setMetodosError(
+        e instanceof Error ? e.message : 'No se pudo crear el metodo'
+      );
+    } finally {
+      setMetodoSaving(false);
+    }
+  }
+
+  function startEditMetodo(m: any) {
+    setEditMetodoId(Number(m.id));
+    setEditMetodoForm({
+      nombre: m.nombre || '',
+      moneda: m.moneda || '',
+      orden: String(m.orden ?? 0),
+      activo: Boolean(m.activo),
+    });
+    setMetodosError(null);
+    setMetodosSuccess(null);
+  }
+
+  function cancelEditMetodo() {
+    setEditMetodoId(null);
+    setEditMetodoForm({ nombre: '', moneda: '', orden: '', activo: true });
+  }
+
+  async function saveEditMetodo(id: number) {
+    setMetodosError(null);
+    setMetodosSuccess(null);
+    const nombre = editMetodoForm.nombre.trim();
+    if (!nombre) {
+      setMetodosError('El nombre es requerido');
+      return;
+    }
+    const ordenNum = Number(editMetodoForm.orden || 0);
+    try {
+      await Api.actualizarMetodoPago(id, {
+        nombre,
+        moneda: editMetodoForm.moneda ? editMetodoForm.moneda.trim() : null,
+        orden: Number.isFinite(ordenNum) ? ordenNum : 0,
+        activo: editMetodoForm.activo,
+      });
+      setMetodosSuccess('Metodo actualizado');
+      cancelEditMetodo();
+      await loadMetodosPago();
+    } catch (e) {
+      setMetodosError(
+        e instanceof Error ? e.message : 'No se pudo actualizar el metodo'
+      );
+    }
+  }
+
+  async function toggleMetodoActivo(m: any) {
+    setMetodosError(null);
+    setMetodosSuccess(null);
+    try {
+      await Api.actualizarMetodoPago(Number(m.id), { activo: !m.activo });
+      setMetodosSuccess(m.activo ? 'Metodo desactivado' : 'Metodo activado');
+      await loadMetodosPago();
+    } catch (e) {
+      setMetodosError(
+        e instanceof Error ? e.message : 'No se pudo actualizar el metodo'
+      );
+    }
+  }
+
   async function onResetPanel() {
     setResetError(null);
     setResetSuccess(null);
@@ -293,6 +602,8 @@ export default function ConfiguracionAdmin() {
         return 'Licencia invalida';
       case 'NO_PUBLIC_KEY':
         return 'Servidor sin clave publica configurada';
+      case 'DEMO_EXPIRED':
+        return 'Demo vencida (consultar al proveedor)';
       default:
         return 'Licencia no valida';
     }
@@ -559,6 +870,339 @@ export default function ConfiguracionAdmin() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+          <div className="text-sm text-slate-300 mb-2">Nombres de precios</div>
+          <div className="space-y-3 text-sm">
+            {priceLabelsError && <Alert kind="error" message={priceLabelsError} />}
+            {priceLabelsSuccess && <Alert kind="info" message={priceLabelsSuccess} />}
+            {priceLabelsLoading && (
+              <div className="text-xs text-slate-400">Cargando nombres...</div>
+            )}
+            <form onSubmit={onSavePriceLabels} className="space-y-2">
+              <label className="block">
+                <div className="text-xs text-slate-400 mb-1">Etiqueta para precio 1</div>
+                <input
+                  className="input-modern w-full text-sm"
+                  value={priceLabels.local}
+                  onChange={(e) =>
+                    setPriceLabels((prev) => ({ ...prev, local: e.target.value }))
+                  }
+                  placeholder="Precio Distribuidor"
+                  disabled={priceLabelsSaving}
+                />
+              </label>
+              <label className="block">
+                <div className="text-xs text-slate-400 mb-1">Etiqueta para precio 2</div>
+                <input
+                  className="input-modern w-full text-sm"
+                  value={priceLabels.distribuidor}
+                  onChange={(e) =>
+                    setPriceLabels((prev) => ({ ...prev, distribuidor: e.target.value }))
+                  }
+                  placeholder="Precio Mayorista"
+                  disabled={priceLabelsSaving}
+                />
+              </label>
+              <label className="block">
+                <div className="text-xs text-slate-400 mb-1">Etiqueta para precio 3</div>
+                <input
+                  className="input-modern w-full text-sm"
+                  value={priceLabels.final}
+                  onChange={(e) =>
+                    setPriceLabels((prev) => ({ ...prev, final: e.target.value }))
+                  }
+                  placeholder="Precio Final"
+                  disabled={priceLabelsSaving}
+                />
+              </label>
+              <button
+                type="submit"
+                className="h-9 rounded-lg bg-indigo-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={priceLabelsSaving}
+              >
+                {priceLabelsSaving ? 'Guardando...' : 'Guardar nombres'}
+              </button>
+            </form>
+            <p className="text-xs text-slate-400">
+              Se usan en catalogos, exportaciones y PDFs del sistema.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+          <div className="text-sm text-slate-300 mb-2">Metodos de pago</div>
+          <div className="space-y-3 text-sm">
+            {metodosError && <Alert kind="error" message={metodosError} />}
+            {metodosSuccess && <Alert kind="info" message={metodosSuccess} />}
+            {metodosLoading && (
+              <div className="text-xs text-slate-400">Cargando metodos...</div>
+            )}
+            <form onSubmit={onCreateMetodoPago} className="space-y-2">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <input
+                  className="input-modern w-full text-sm"
+                  placeholder="Nombre (ej: Transferencia)"
+                  value={metodoForm.nombre}
+                  onChange={(e) => setMetodoForm((prev) => ({ ...prev, nombre: e.target.value }))}
+                  disabled={metodoSaving}
+                />
+                <input
+                  className="input-modern w-full text-sm"
+                  placeholder="Moneda (ARS, USD)"
+                  value={metodoForm.moneda}
+                  onChange={(e) => setMetodoForm((prev) => ({ ...prev, moneda: e.target.value }))}
+                  disabled={metodoSaving}
+                />
+                <input
+                  className="input-modern w-full text-sm"
+                  placeholder="Orden"
+                  type="number"
+                  value={metodoForm.orden}
+                  onChange={(e) => setMetodoForm((prev) => ({ ...prev, orden: e.target.value }))}
+                  disabled={metodoSaving}
+                />
+              </div>
+              <button
+                type="submit"
+                className="h-9 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={metodoSaving}
+              >
+                {metodoSaving ? 'Creando...' : 'Crear metodo'}
+              </button>
+            </form>
+
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                className="rounded border-slate-500"
+                checked={showMetodosInactivos}
+                onChange={(e) => setShowMetodosInactivos(e.target.checked)}
+              />
+              Mostrar inactivos
+            </label>
+
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {metodosPago.map((m) => {
+                const isEditing = editMetodoId === Number(m.id);
+                return (
+                  <div
+                    key={m.id}
+                    className="bg-white/5 border border-white/10 rounded-lg px-2 py-2 text-xs"
+                  >
+                    {isEditing ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                          <input
+                            className="input-modern w-full text-sm"
+                            value={editMetodoForm.nombre}
+                            onChange={(e) =>
+                              setEditMetodoForm((prev) => ({ ...prev, nombre: e.target.value }))
+                            }
+                          />
+                          <input
+                            className="input-modern w-full text-sm"
+                            value={editMetodoForm.moneda}
+                            onChange={(e) =>
+                              setEditMetodoForm((prev) => ({ ...prev, moneda: e.target.value }))
+                            }
+                            placeholder="Moneda"
+                          />
+                          <input
+                            className="input-modern w-full text-sm"
+                            type="number"
+                            value={editMetodoForm.orden}
+                            onChange={(e) =>
+                              setEditMetodoForm((prev) => ({ ...prev, orden: e.target.value }))
+                            }
+                            placeholder="Orden"
+                          />
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            className="rounded border-slate-500"
+                            checked={editMetodoForm.activo}
+                            onChange={(e) =>
+                              setEditMetodoForm((prev) => ({ ...prev, activo: e.target.checked }))
+                            }
+                          />
+                          Metodo activo
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-emerald-500/20 border border-emerald-500/30 text-emerald-200 text-xs"
+                            onClick={() => saveEditMetodo(Number(m.id))}
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-white/10 border border-white/10 text-xs"
+                            onClick={cancelEditMetodo}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-100 truncate">
+                            {m.nombre}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {m.moneda ? `Moneda: ${m.moneda}` : 'Moneda: -'} · Orden{' '}
+                            {m.orden ?? 0} · {m.activo ? 'Activo' : 'Inactivo'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-white/10 border border-white/10 text-xs"
+                            onClick={() => startEditMetodo(m)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-slate-700 text-xs"
+                            onClick={() => toggleMetodoActivo(m)}
+                          >
+                            {m.activo ? 'Desactivar' : 'Activar'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {!metodosPago.length && !metodosLoading && (
+                <div className="text-xs text-slate-500">No hay metodos cargados.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+          <div className="text-sm text-slate-300 mb-2">Ranking de vendedores</div>
+          <div className="space-y-3 text-sm">
+            {rankingError && <Alert kind="error" message={rankingError} />}
+            {rankingSuccess && <Alert kind="info" message={rankingSuccess} />}
+            {rankingLoading && (
+              <div className="text-xs text-slate-400">Cargando metrica...</div>
+            )}
+            <form onSubmit={onSaveRankingMetric} className="space-y-2">
+              <label className="block">
+                <div className="text-xs text-slate-400 mb-1">Metrica principal</div>
+                <select
+                  className="input-modern w-full text-sm"
+                  value={rankingMetric}
+                  onChange={(e) => setRankingMetric(e.target.value as any)}
+                  disabled={rankingLoading || rankingSaving}
+                >
+                  <option value="cantidad_ventas">Cantidad de ventas</option>
+                  <option value="margen_venta">Margen de venta</option>
+                </select>
+              </label>
+              <button
+                type="submit"
+                className="h-9 rounded-lg bg-indigo-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={rankingSaving || rankingLoading}
+              >
+                {rankingSaving ? 'Guardando...' : 'Guardar metrica'}
+              </button>
+            </form>
+            <p className="text-xs text-slate-400">
+              Define como se ordena el ranking en Sueldos a vendedores.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+          <div className="text-sm text-slate-300 mb-2">Zonas de clientes</div>
+          <div className="space-y-3 text-sm">
+            {zonasError && <Alert kind="error" message={zonasError} />}
+            {zonasSuccess && <Alert kind="info" message={zonasSuccess} />}
+            {zonasLoading && (
+              <div className="text-xs text-slate-400">Cargando zonas...</div>
+            )}
+            <form onSubmit={onCreateZona} className="space-y-2">
+              <div className="grid grid-cols-1 md:grid-cols-[1.2fr_0.6fr_auto] gap-2 items-center">
+                <input
+                  className="input-modern w-full text-sm"
+                  placeholder="Nombre de zona"
+                  value={zonaForm.nombre}
+                  onChange={(e) => setZonaForm((prev) => ({ ...prev, nombre: e.target.value }))}
+                  disabled={zonaSaving}
+                />
+                <input
+                  type="color"
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900"
+                  value={zonaForm.color_hex}
+                  onChange={(e) => setZonaForm((prev) => ({ ...prev, color_hex: e.target.value }))}
+                  disabled={zonaSaving}
+                />
+                <button
+                  type="submit"
+                  className="h-9 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={zonaSaving}
+                >
+                  {zonaSaving ? 'Creando...' : 'Crear zona'}
+                </button>
+              </div>
+            </form>
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {zonas.map((z) => (
+                <div
+                  key={z.id}
+                  className="bg-white/5 border border-white/10 rounded-lg px-2 py-2 text-xs"
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-[1.2fr_0.9fr_auto] gap-2 items-center">
+                    <input
+                      className="input-modern w-full text-sm"
+                      value={z.nombre || ''}
+                      onChange={(e) => updateZonaField(Number(z.id), { nombre: e.target.value })}
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        className="h-9 w-14 rounded-lg border border-white/10 bg-slate-900"
+                        value={z.color_hex || '#64748B'}
+                        onChange={(e) => updateZonaField(Number(z.id), { color_hex: e.target.value })}
+                      />
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          className="rounded border-slate-500"
+                          checked={Boolean(z.activo)}
+                          onChange={(e) => updateZonaField(Number(z.id), { activo: e.target.checked })}
+                        />
+                        Activo
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      className="px-2 py-1 rounded bg-indigo-500/20 border border-indigo-500/30 text-indigo-200 text-xs disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={() => saveZona(Number(z.id))}
+                      disabled={zonaSaving}
+                    >
+                      {zonaSaving ? 'Guardando...' : 'Guardar'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {!zonasLoading && !zonas.length && (
+                <div className="text-xs text-slate-500">No hay zonas cargadas.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
           <div className="text-sm text-slate-300 mb-2">Licencia de usuarios</div>
           <div className="space-y-3 text-sm text-slate-300">
             {licenseLoading && <div className="text-xs text-slate-400">Cargando licencia...</div>}
@@ -569,7 +1213,7 @@ export default function ConfiguracionAdmin() {
                 </div>
                 {licenseStatus.install_id && (
                   <div className="flex items-center gap-2">
-                    <span className="truncate">ID instalaciÃ³n: {licenseStatus.install_id}</span>
+                    <span className="truncate">ID instalacion: {licenseStatus.install_id}</span>
                     <button
                       type="button"
                       className="text-xs text-slate-400 hover:text-slate-200"
@@ -581,13 +1225,41 @@ export default function ConfiguracionAdmin() {
                 )}
                 {licenseStatus.licensed && (
                   <>
-                    <div>Usuarios mÃ¡x: {licenseStatus.max_users ?? 'Sin lÃ­mite'}</div>
+                    <div>Usuarios max: {licenseStatus.max_users ?? 'Sin limite'}</div>
                     <div>Vence: {licenseStatus.expires_at ? new Date(licenseStatus.expires_at).toLocaleDateString() : 'Sin vencimiento'}</div>
                   </>
+                )}
+                {licenseStatus.license_type === 'demo' && (
+                  <div className="text-amber-300">
+                    Demo activa{licenseStatus.demo_days_left != null ? ` (${licenseStatus.demo_days_left} dÃ­as restantes)` : ''}.
+                  </div>
                 )}
                 {!licenseStatus.licensed && (
                   <div>Motivo: {formatLicenseReason(licenseStatus.reason) || 'No disponible'}</div>
                 )}
+              </div>
+            )}
+            {!licenseLoading && licenseStatus && (
+              <div className="mt-3">
+                <div className="text-xs text-slate-400 mb-2">Modulos habilitados</div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  {FEATURE_LIST.map((f) => {
+                    const enabled = hasFeature(licenseStatus, f.key);
+                    return (
+                      <div
+                        key={f.key}
+                        className={[
+                          'rounded-md border px-2 py-1',
+                          enabled
+                            ? 'border-emerald-500/30 text-emerald-200 bg-emerald-500/10'
+                            : 'border-white/10 text-slate-400 bg-white/5',
+                        ].join(' ')}
+                      >
+                        {f.label}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -596,11 +1268,11 @@ export default function ConfiguracionAdmin() {
 
             <form onSubmit={onActivateLicense} className="space-y-2">
               <label className="block text-xs text-slate-400">
-                CÃ³digo de licencia
+                Codigo de licencia
               </label>
               <textarea
                 className="input-modern w-full text-xs min-h-[120px]"
-                placeholder="PegÃ¡ aquÃ­ el cÃ³digo de licencia (sin archivo)"
+                placeholder="Pega aqui­ el codigo de licencia (sin archivo)"
                 value={licenseCode}
                 onChange={(e) => setLicenseCode(e.target.value)}
               />

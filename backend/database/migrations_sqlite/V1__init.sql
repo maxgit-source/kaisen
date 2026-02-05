@@ -362,6 +362,28 @@ CREATE INDEX IF NOT EXISTS ix_pagos_venta ON pagos(venta_id);
 CREATE INDEX IF NOT EXISTS ix_pagos_cliente ON pagos(cliente_id);
 CREATE INDEX IF NOT EXISTS ix_pagos_fecha ON pagos(fecha);
 
+CREATE TABLE IF NOT EXISTS metodos_pago (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  moneda TEXT,
+  activo INTEGER NOT NULL DEFAULT 1,
+  orden INTEGER NOT NULL DEFAULT 0,
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_metodos_pago_activo ON metodos_pago(activo);
+CREATE INDEX IF NOT EXISTS ix_metodos_pago_orden ON metodos_pago(orden);
+
+CREATE TABLE IF NOT EXISTS pagos_metodos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pago_id INTEGER NOT NULL REFERENCES pagos(id) ON DELETE CASCADE,
+  metodo_id INTEGER NOT NULL REFERENCES metodos_pago(id) ON DELETE RESTRICT,
+  monto REAL NOT NULL CHECK (monto > 0),
+  moneda TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_pagos_metodos_pago ON pagos_metodos(pago_id);
+CREATE INDEX IF NOT EXISTS ix_pagos_metodos_metodo ON pagos_metodos(metodo_id);
+
 CREATE TABLE IF NOT EXISTS pagos_proveedores (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   compra_id INTEGER NOT NULL REFERENCES compras(id) ON DELETE CASCADE,

@@ -22,8 +22,8 @@ const validateCategory = [
     .notEmpty().withMessage('El nombre es obligatorio')
     .isLength({ min: 2, max: 100 }).withMessage('El nombre debe tener entre 2 y 100 caracteres'),
   check('image_url')
-    .trim()
-    .notEmpty().withMessage('La imagen es obligatoria'),
+    .optional()
+    .trim(),
   check('description')
     .optional()
     .isLength({ max: 2000 }).withMessage('La descripción es demasiado larga')
@@ -129,4 +129,3 @@ module.exports = {
   updateCategoria: [...validateCategoryUpdate, updateCategoria],
   deleteCategoria,
 };
-

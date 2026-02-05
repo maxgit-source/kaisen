@@ -1,4 +1,5 @@
 const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 
 // Número de teléfono para alertas de seguridad (usar .env)
 const USER_PHONE_NUMBER = process.env.ALERT_PHONE; 
@@ -64,10 +65,30 @@ const apiGlobalLimiter = rateLimit({
 });
 
 const loggingMiddleware = (req, res, next) => {
+  const reqId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
+  req.id = reqId;
+  res.setHeader('X-Request-Id', reqId);
+  const startedAt = process.hrtime.bigint();
   const ua = req.get('User-Agent');
   const authHeader = req.get('Authorization');
   const redactedAuth = authHeader ? `${authHeader.split(' ')[0]} [REDACTED]` : 'none';
-  console.log(`${new Date().toISOString()} - IP: ${req.ip} - ${req.method} ${req.originalUrl} - UA: ${ua} - Auth: ${redactedAuth}`);
+
+  res.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const entry = {
+      ts: new Date().toISOString(),
+      request_id: reqId,
+      ip: req.ip,
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      duration_ms: Number(durationMs.toFixed(2)),
+      ua,
+      auth: redactedAuth,
+    };
+    console.log(JSON.stringify(entry));
+  });
+
   next();
 };
 

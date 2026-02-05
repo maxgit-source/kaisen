@@ -7,6 +7,7 @@ const { SECRET, REFRESH_SECRET, addTokenToBlacklist } = require('../middlewares/
 const { sendVerificationEmail } = require('../utils/mailer');
 const users = require('../db/repositories/userRepository');
 const tokens = require('../db/repositories/tokenRepository');
+const licenseService = require('../services/licenseService');
 
 const JWT_ALG = process.env.JWT_ALG || 'HS256';
 const JWT_ISSUER = process.env.JWT_ISSUER;
@@ -47,7 +48,7 @@ function buildSignOpts(ttl) {
   return opts;
 }
 
-async function issueTokens(user) {
+async function issueTokens(user, meta = {}) {
   if (!SECRET || !REFRESH_SECRET) {
     throw new Error('Server JWT secrets not configured');
   }
@@ -60,7 +61,14 @@ async function issueTokens(user) {
   // Persist refresh token (expiry from now + 7d)
   const expMs = 7 * 24 * 60 * 60 * 1000;
   const expiresAt = new Date(Date.now() + expMs);
-  await tokens.saveRefreshToken({ user_id: user.id, token: refreshToken, jti: refreshJti, user_agent: null, ip: null, expires_at: expiresAt });
+  await tokens.saveRefreshToken({
+    user_id: user.id,
+    token: refreshToken,
+    jti: refreshJti,
+    user_agent: meta.user_agent || null,
+    ip: meta.ip || null,
+    expires_at: expiresAt,
+  });
   return { accessToken, refreshToken };
 }
 
@@ -73,6 +81,12 @@ async function login(req, res) {
   if (!failedLoginAttempts.has(clientIp)) failedLoginAttempts.set(clientIp, 0);
 
   try {
+    const demoExpired = await licenseService.isDemoExpired();
+    if (demoExpired) {
+      return res.status(403).json({
+        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
+      });
+    }
     const user = await users.findByEmail((email || '').trim().toLowerCase());
     if (!user || user.activo === false) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
@@ -87,7 +101,7 @@ async function login(req, res) {
       return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
     failedLoginAttempts.delete(clientIp);
-    const t = await issueTokens(user);
+    const t = await issueTokens(user, { user_agent: req.get('User-Agent'), ip: req.ip });
     res.json(t);
   } catch (e) {
     console.error('Login error:', e.message);
@@ -102,6 +116,12 @@ async function loginStep1(req, res) {
   const clientIp = req.ip;
   if (!failedLoginAttempts.has(clientIp)) failedLoginAttempts.set(clientIp, 0);
   try {
+    const demoExpired = await licenseService.isDemoExpired();
+    if (demoExpired) {
+      return res.status(403).json({
+        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
+      });
+    }
     const user = await users.findByEmail((email || '').trim().toLowerCase());
     if (!user || user.activo === false) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
@@ -141,7 +161,16 @@ function loginStep2(req, res) {
   const refreshJti = newJti();
   const refreshToken = jwt.sign(payload, REFRESH_SECRET, { ...buildSignOpts('7d'), jwtid: refreshJti });
   const expMs = 7 * 24 * 60 * 60 * 1000;
-  tokens.saveRefreshToken({ user_id: rec.userId, token: refreshToken, jti: refreshJti, user_agent: null, ip: null, expires_at: new Date(Date.now() + expMs) }).catch(() => {});
+  tokens
+    .saveRefreshToken({
+      user_id: rec.userId,
+      token: refreshToken,
+      jti: refreshJti,
+      user_agent: req.get('User-Agent'),
+      ip: req.ip,
+      expires_at: new Date(Date.now() + expMs),
+    })
+    .catch(() => {});
   return res.json({ accessToken, refreshToken });
 }
 
@@ -150,6 +179,12 @@ async function refreshToken(req, res) {
   if (!refreshToken) return res.status(401).json({ error: 'Refresh token requerido' });
   if (!REFRESH_SECRET || !SECRET) return res.status(500).json({ error: 'JWT no configurado' });
   try {
+    const demoExpired = await licenseService.isDemoExpired();
+    if (demoExpired) {
+      return res.status(403).json({
+        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
+      });
+    }
     const verifyOptions = { algorithms: [JWT_ALG] };
     if (JWT_ISSUER) verifyOptions.issuer = JWT_ISSUER;
     if (JWT_AUDIENCE) verifyOptions.audience = JWT_AUDIENCE;
@@ -184,4 +219,3 @@ module.exports = {
   refreshToken,
   logout,
 };
-

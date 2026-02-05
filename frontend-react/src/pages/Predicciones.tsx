@@ -12,6 +12,8 @@ import DataTable from '../ui/DataTable';
 import Skeleton from '../ui/Skeleton';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
+import { useLicense } from '../context/LicenseContext';
+import { hasFeature } from '../lib/features';
 import { Api } from '../lib/api';
 
 type ForecastRow = {
@@ -83,9 +85,11 @@ function getSettledError(result: PromiseSettledResult<any>, fallback: string) {
 }
 
 export default function Predicciones() {
+  const { status: licenseStatus } = useLicense();
+  const aiEnabled = hasFeature(licenseStatus, 'ai');
   const [horizon, setHorizon] = useState<number>(14);
   const [history, setHistory] = useState<number>(90);
-  const llmEnabled = import.meta.env.VITE_AI_LLM_ENABLED === 'true';
+  const llmEnabled = aiEnabled && import.meta.env.VITE_AI_LLM_ENABLED === 'true';
 
   const [forecast, setForecast] = useState<ForecastRow[]>([]);
   const [stockouts, setStockouts] = useState<StockoutRow[]>([]);
@@ -131,6 +135,10 @@ export default function Predicciones() {
   const [detailExplainLoading, setDetailExplainLoading] = useState(false);
   const [detailExplainError, setDetailExplainError] = useState<string | null>(null);
   const [detailExplain, setDetailExplain] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryText, setSummaryText] = useState<string | null>(null);
+  const [summaryData, setSummaryData] = useState<any>(null);
 
   const [productosCache, setProductosCache] = useState<ProductoInfo[] | null>(null);
   const [precioError, setPrecioError] = useState<string | null>(null);
@@ -293,22 +301,35 @@ export default function Predicciones() {
     }
   }
 
+  function normalizeDateKey(value: unknown) {
+    if (!value) return '';
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    const raw = String(value);
+    const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
+    if (match) return match[0];
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+    return raw;
+  }
+
   const detailChartData = useMemo(() => {
     if (!detail) return [];
     const map = new Map<string, { fecha: string; historico: number | null; forecast: number | null }>();
-    for (const r of detail.history) {
-      const key = new Date(r.dia).toISOString().slice(0, 10);
+    const historyRows = Array.isArray(detail.history) ? detail.history : [];
+    const forecastRows = Array.isArray(detail.forecast) ? detail.forecast : [];
+    for (const r of historyRows) {
+      const key = normalizeDateKey(r.dia);
+      if (!key) continue;
       map.set(key, { fecha: key, historico: r.unidades, forecast: null });
     }
-    for (const r of detail.forecast) {
-      const key = new Date(r.dia).toISOString().slice(0, 10);
+    for (const r of forecastRows) {
+      const key = normalizeDateKey(r.dia);
+      if (!key) continue;
       const existing = map.get(key) || { fecha: key, historico: null, forecast: null };
       existing.forecast = r.unidades;
       map.set(key, existing);
     }
-    return Array.from(map.values()).sort(
-      (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime(),
-    );
+    return Array.from(map.values()).sort((a, b) => a.fecha.localeCompare(b.fecha));
   }, [detail]);
 
   async function explainDetail(productoId?: number) {
@@ -328,6 +349,63 @@ export default function Predicciones() {
     } finally {
       setDetailExplainLoading(false);
     }
+  }
+
+  async function generarResumenPredicciones() {
+    if (!llmEnabled) {
+      setSummaryError('IA no habilitada.');
+      return;
+    }
+    setSummaryLoading(true);
+    setSummaryError(null);
+    setSummaryText(null);
+    try {
+      const resp: any = await Api.aiPredictionsSummary({
+        days: horizon,
+        history,
+        limit: 8,
+      });
+      setSummaryText(resp?.narrative || '');
+      setSummaryData(resp?.data || null);
+    } catch (e: any) {
+      setSummaryError(e?.message || 'No se pudo generar el resumen IA');
+      setSummaryText(null);
+      setSummaryData(null);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
+  function renderNarrative(text: string) {
+    const lines = text.split('\n');
+    return (
+      <div className="space-y-2">
+        {lines.map((raw, idx) => {
+          const line = raw.trim();
+          if (!line) return <div key={`sp-${idx}`} className="h-2" />;
+          if (/^#{1,3}\s/.test(line)) {
+            return (
+              <div key={`h-${idx}`} className="text-sm font-semibold text-slate-100">
+                {line.replace(/^#{1,3}\s*/, '')}
+              </div>
+            );
+          }
+          if (line.startsWith('- ') || line.startsWith('* ')) {
+            return (
+              <div key={`b-${idx}`} className="flex gap-2 text-sm text-slate-200">
+                <span className="text-slate-500">-</span>
+                <span>{line.replace(/^[-*]\s*/, '')}</span>
+              </div>
+            );
+          }
+          return (
+            <div key={`t-${idx}`} className="text-sm text-slate-200">
+              {line}
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   async function ensureProductosCache() {
@@ -436,6 +514,49 @@ export default function Predicciones() {
       </div>
 
       {error && <Alert kind="error" message={error} />}
+
+      <ChartCard
+        title="Resumen IA de predicciones"
+        right={
+          <Button onClick={generarResumenPredicciones} disabled={summaryLoading || !llmEnabled}>
+            {summaryLoading ? 'Generando...' : 'Generar IA'}
+          </Button>
+        }
+      >
+        {!llmEnabled && (
+          <div className="text-sm text-slate-400">
+            La IA esta disponible desde el plan Pro.
+          </div>
+        )}
+        {llmEnabled && (
+          <div className="space-y-3">
+            {summaryError && <Alert kind="error" message={summaryError} />}
+            {summaryText && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+                {renderNarrative(summaryText)}
+              </div>
+            )}
+            {!summaryText && !summaryLoading && !summaryError && (
+              <div className="text-sm text-slate-500">
+                Genera un resumen para tener riesgos, precios a revisar y acciones sugeridas.
+              </div>
+            )}
+            {summaryData?.insights_summary && (
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="px-2 py-1 rounded-full border border-rose-500/30 bg-rose-500/10 text-rose-100">
+                  Altas {summaryData.insights_summary.high}
+                </span>
+                <span className="px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-100">
+                  Medias {summaryData.insights_summary.medium}
+                </span>
+                <span className="px-2 py-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-100">
+                  Bajas {summaryData.insights_summary.low}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </ChartCard>
 
       {llmEnabled && focusProducto && (
         <ChartCard title="ExplicaciИn IA de demanda">

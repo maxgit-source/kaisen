@@ -3,6 +3,7 @@ const router = express.Router();
 const ctrl = require('../controllers/depositocontroller');
 const auth = require('../middlewares/authmiddleware');
 const { requireRole } = require('../middlewares/roleMiddleware');
+const { requireFeature } = require('../middlewares/licenseMiddleware');
 const userDeps = require('../db/repositories/usuarioDepositoRepository');
 const depositoRepo = require('../db/repositories/depositoRepository');
 
@@ -27,8 +28,8 @@ router.get('/mis-depositos', auth, async (req, res) => {
   }
 });
 
-router.post('/depositos', auth, requireRole(['admin', 'gerente']), ctrl.create);
-router.put('/depositos/:id', auth, requireRole(['admin', 'gerente']), ctrl.update);
-router.delete('/depositos/:id', auth, requireRole(['admin']), ctrl.deactivate);
+router.post('/depositos', auth, requireFeature('multideposito'), requireRole(['admin', 'gerente']), ctrl.create);
+router.put('/depositos/:id', auth, requireFeature('multideposito'), requireRole(['admin', 'gerente']), ctrl.update);
+router.delete('/depositos/:id', auth, requireFeature('multideposito'), requireRole(['admin']), ctrl.deactivate);
 
 module.exports = router;

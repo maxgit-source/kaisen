@@ -22,6 +22,14 @@ async function findByName(name) {
   return rows[0] || null;
 }
 
+async function findById(id) {
+  const { rows } = await query(
+    'SELECT id, nombre, activo FROM categorias WHERE id = $1 LIMIT 1',
+    [id]
+  );
+  return rows[0] || null;
+}
+
 async function restoreOrInsert({ name, image_url, description }) {
   return withTransaction(async (client) => {
     const existing = await client.query(
@@ -96,6 +104,7 @@ async function deactivateCascade(id) {
 module.exports = {
   getAllActive,
   findByName,
+  findById,
   restoreOrInsert,
   updateCategory,
   deactivateCascade,

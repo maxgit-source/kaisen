@@ -1,6 +1,7 @@
 export const BRAND = {
-  name: 'ERP-SYSTEM',
-  subtitle: 'Panel de gestión de importaciones',
+  name: 'Sistema Argensystem',
+  subtitle: 'Panel de gestion',
   logoUrl: '' // puede quedar vacío para usar iniciales
 };
+
 

@@ -11,6 +11,7 @@ const validateCreate = [
   body('items.*.cantidad').isInt({ gt: 0 }),
   body('items.*.precio_unitario').optional().isFloat({ gt: 0 }),
   body('es_reserva').optional().isBoolean(),
+  body('caja_tipo').optional().isIn(['home_office', 'sucursal']),
   body('referido_codigo').optional().isString().isLength({ min: 4, max: 40 }).trim(),
 ];
 
@@ -22,7 +23,7 @@ async function create(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   try {
-    const { cliente_id, fecha, descuento, impuestos, items, deposito_id, es_reserva } = req.body;
+    const { cliente_id, fecha, descuento, impuestos, items, deposito_id, es_reserva, caja_tipo } = req.body;
     const referido_codigo = req.body?.referido_codigo;
     try {
       if (process.env.NODE_ENV !== 'production') {
@@ -40,6 +41,7 @@ async function create(req, res) {
       es_reserva,
       usuario_id,
       referido_codigo,
+      caja_tipo,
     });
     res.status(201).json(r);
   } catch (e) {
@@ -75,6 +77,12 @@ async function entregar(req, res) {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'ID inválido' });
+    const info = await repo.getVentaEntregaInfo(id);
+    if (!info) return res.status(404).json({ error: 'Venta no encontrada' });
+    const role = req.authUser?.rol || req.user?.role || null;
+    if (info.caja_tipo === 'home_office' && role !== 'admin') {
+      return res.status(403).json({ error: 'Solo admin puede entregar ventas home office' });
+    }
     const r = await repo.entregarVenta(id);
     res.json(r);
   } catch (e) {

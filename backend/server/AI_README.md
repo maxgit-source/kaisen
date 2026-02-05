@@ -11,6 +11,12 @@ Endpoints
   - Query: `margin` (def 0.3), `history` (def 90), `limit`.
 - GET `/api/ai/insights` Recomendaciones y alertas consolidadas.
   - Query: `days` (def 14), `history` (def 90), `limit` (def 12).
+- GET `/api/ai/report-data` Datos estructurados para reporte ejecutivo.
+  - Query: `desde`, `hasta`, `history`, `forecast`, `limit`, `top`.
+- POST `/api/ai/report-summary` Resumen narrativo con LLM del reporte ejecutivo.
+  - Body/Query: `desde`, `hasta`, `history`, `forecast`, `limit`, `top`.
+- POST `/api/ai/predictions-summary` Resumen narrativo con LLM de predicciones.
+  - Body/Query: `days`, `history`, `limit`, `category_id`.
 
 Variables de entorno (opcionales)
 - `AI_STOCK_TARGET_DAYS` (def 30): dÃ­as de cobertura objetivo para sugerir reposiciÃ³n.
@@ -24,8 +30,11 @@ Variables de entorno (opcionales)
 - `AI_FORECAST_CACHE_MS` (def 60000) y `AI_INSIGHTS_CACHE_MS` (def 30000): cache de resultados.
 - `AI_ALERTS_CONFIG_CACHE_MS` (def 60000): cache de configuracion de alertas.
 - `AI_OVERSTOCK_DAYS` (def 90): cobertura minima para alertar sobre stock alto.
+- `AI_OVERSTOCK_MIN_DAILY_AVG` (def 0.05): rotacion diaria minima para alertar sobre stock alto.
+- `AI_OVERSTOCK_MIN_UNITS` (def 2): ventas minimas en el periodo para alertar sobre stock alto.
 - `AI_PRICE_ALERT_PCT` (def 0.08) y `AI_PRICE_ALERT_ABS` (def 0): desvio minimo para alertas de precio.
 - `AI_STOCKOUT_DAYS_HIGH` (def 3) y `AI_STOCKOUT_DAYS_MED` (def 7): umbrales de criticidad.
+- `AI_REPORT_CACHE_MS` (def 30000): cache para reporte ejecutivo estructurado.
 
 Parametros de sistema (parametros_sistema)
 - `deuda_umbral_rojo`: umbral para alertas de deuda.

@@ -5,7 +5,44 @@ const configRepo = require('../db/repositories/configRepository');
 
 const INSTALL_ID_KEY = 'install_id';
 const LICENSE_CODE_KEY = 'license_code';
+const DEMO_START_KEY = 'demo_start_at';
 const FEATURE_USUARIOS = 'usuarios';
+const FEATURE_ARCA = 'arca';
+const FEATURE_AI = 'ai';
+const FEATURE_MARKETPLACE = 'marketplace';
+const FEATURE_CLOUD = 'cloud';
+const FEATURE_APROBACIONES = 'aprobaciones';
+const FEATURE_CRM = 'crm';
+const FEATURE_POSTVENTA = 'postventa';
+const FEATURE_MULTIDEPOSITO = 'multideposito';
+
+const DEMO_DAYS = Number(process.env.DEMO_DAYS) || 3;
+const DEMO_MAX_USERS = process.env.DEMO_MAX_USERS
+  ? Number(process.env.DEMO_MAX_USERS)
+  : null;
+
+const ALL_FEATURES = [
+  FEATURE_USUARIOS,
+  FEATURE_ARCA,
+  FEATURE_AI,
+  FEATURE_MARKETPLACE,
+  FEATURE_CLOUD,
+  FEATURE_APROBACIONES,
+  FEATURE_CRM,
+  FEATURE_POSTVENTA,
+  FEATURE_MULTIDEPOSITO,
+];
+
+function parseFeatureList(raw, fallback) {
+  if (!raw) return fallback;
+  const list = String(raw)
+    .split(',')
+    .map((f) => f.trim())
+    .filter(Boolean);
+  return list.length ? list : fallback;
+}
+
+const DEMO_FEATURES = parseFeatureList(process.env.DEMO_FEATURES, ALL_FEATURES);
 
 function stableStringify(value) {
   if (value === null || value === undefined) return 'null';
@@ -144,18 +181,100 @@ async function setStoredLicenseCode(code, usuarioId) {
   return configRepo.setTextParam(LICENSE_CODE_KEY, code, usuarioId);
 }
 
+async function getDemoInfo({ usuarioId, ensure = false } = {}) {
+  const code = await getStoredLicenseCode();
+  if (code) {
+    return {
+      active: false,
+      expired: false,
+      started_at: null,
+      expires_at: null,
+      days_left: null,
+      days_total: DEMO_DAYS,
+    };
+  }
+  let start = await configRepo.getTextParam(DEMO_START_KEY);
+  if (!start && ensure) {
+    start = new Date().toISOString();
+    await configRepo.setTextParam(DEMO_START_KEY, start, usuarioId || null);
+  }
+  let startMs = start ? Date.parse(start) : NaN;
+  if (!Number.isFinite(startMs) && ensure) {
+    start = new Date().toISOString();
+    startMs = Date.parse(start);
+    await configRepo.setTextParam(DEMO_START_KEY, start, usuarioId || null);
+  }
+  if (!Number.isFinite(startMs)) {
+    return {
+      active: false,
+      expired: false,
+      started_at: null,
+      expires_at: null,
+      days_left: null,
+      days_total: DEMO_DAYS,
+    };
+  }
+  const expiresMs = startMs + DEMO_DAYS * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const expired = now > expiresMs;
+  const daysLeft = expired ? 0 : Math.ceil((expiresMs - now) / (24 * 60 * 60 * 1000));
+  return {
+    active: !expired,
+    expired,
+    started_at: new Date(startMs).toISOString(),
+    expires_at: new Date(expiresMs).toISOString(),
+    days_left: daysLeft,
+    days_total: DEMO_DAYS,
+  };
+}
+
+async function ensureDemoStart(usuarioId) {
+  return getDemoInfo({ usuarioId, ensure: true });
+}
+
+function buildDemoPayload(demo) {
+  return {
+    features: DEMO_FEATURES,
+    max_users: Number.isFinite(DEMO_MAX_USERS) ? DEMO_MAX_USERS : null,
+    expires_at: demo?.expires_at || null,
+  };
+}
+
 async function getLicenseStatus(opts = {}) {
   const includeInstallId = Boolean(opts.includeInstallId);
   const installId = await getOrCreateInstallId(opts.usuarioId || null);
   const code = await getStoredLicenseCode();
   if (!code) {
+    const demo = await getDemoInfo({ usuarioId: opts.usuarioId || null, ensure: true });
+    if (demo.expired) {
+      return {
+        install_id: includeInstallId ? installId : null,
+        licensed: false,
+        features: [],
+        max_users: null,
+        expires_at: null,
+        reason: 'DEMO_EXPIRED',
+        license_type: 'demo',
+        demo_active: false,
+        demo_started_at: demo.started_at,
+        demo_expires_at: demo.expires_at,
+        demo_days_left: demo.days_left,
+        demo_days_total: demo.days_total,
+      };
+    }
     return {
       install_id: includeInstallId ? installId : null,
-      licensed: false,
-      features: [],
-      max_users: null,
-      expires_at: null,
-      reason: 'NO_LICENSE',
+      licensed: true,
+      features: DEMO_FEATURES,
+      max_users: Number.isFinite(DEMO_MAX_USERS) ? DEMO_MAX_USERS : null,
+      expires_at: demo.expires_at || null,
+      reason: null,
+      license_type: 'demo',
+      demo_active: true,
+      demo_started_at: demo.started_at,
+      demo_expires_at: demo.expires_at,
+      demo_days_left: demo.days_left,
+      demo_days_total: demo.days_total,
     };
   }
   const envelope = decodeEnvelope(code);
@@ -168,6 +287,12 @@ async function getLicenseStatus(opts = {}) {
       max_users: null,
       expires_at: null,
       reason: result.reason,
+      license_type: 'full',
+      demo_active: false,
+      demo_started_at: null,
+      demo_expires_at: null,
+      demo_days_left: null,
+      demo_days_total: DEMO_DAYS,
     };
   }
   const payload = result.payload;
@@ -178,6 +303,12 @@ async function getLicenseStatus(opts = {}) {
     max_users: payload.max_users != null ? Number(payload.max_users) : null,
     expires_at: payload.expires_at || null,
     reason: null,
+    license_type: 'full',
+    demo_active: false,
+    demo_started_at: null,
+    demo_expires_at: null,
+    demo_days_left: null,
+    demo_days_total: DEMO_DAYS,
   };
 }
 
@@ -197,7 +328,13 @@ async function activateLicense(code, usuarioId) {
 async function getActiveLicense() {
   const installId = await getOrCreateInstallId(null);
   const code = await getStoredLicenseCode();
-  if (!code) return null;
+  if (!code) {
+    const demo = await getDemoInfo({ ensure: true });
+    if (demo.active) {
+      return buildDemoPayload(demo);
+    }
+    return null;
+  }
   const envelope = decodeEnvelope(code);
   const result = verifyEnvelope(envelope, installId);
   if (!result.ok) return null;
@@ -209,6 +346,13 @@ function hasFeature(payload, feature) {
   return payload.features.includes(feature);
 }
 
+async function isDemoExpired() {
+  const code = await getStoredLicenseCode();
+  if (code) return false;
+  const demo = await getDemoInfo({ ensure: false });
+  return Boolean(demo.expired);
+}
+
 module.exports = {
   FEATURE_USUARIOS,
   getOrCreateInstallId,
@@ -216,4 +360,7 @@ module.exports = {
   activateLicense,
   getActiveLicense,
   hasFeature,
+  ensureDemoStart,
+  getDemoInfo,
+  isDemoExpired,
 };

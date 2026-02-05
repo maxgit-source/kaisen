@@ -4,6 +4,22 @@ const configRepo = require('../db/repositories/configRepository');
 const audit = require('../services/auditService');
 const net = require('net');
 
+const PRICE_LABEL_KEYS = {
+  local: 'price_label_local',
+  distribuidor: 'price_label_distribuidor',
+  final: 'price_label_final',
+};
+
+const PRICE_LABEL_DEFAULTS = {
+  local: 'Precio Distribuidor',
+  distribuidor: 'Precio Mayorista',
+  final: 'Precio Final',
+};
+
+const RANKING_METRIC_KEY = 'ranking_vendedores_metrica';
+const RANKING_METRIC_DEFAULT = 'cantidad_ventas';
+const RANKING_METRIC_OPTIONS = ['cantidad_ventas', 'margen_venta'];
+
 async function getDolarBlue(req, res) {
   try {
     const valor = await configRepo.getDolarBlue();
@@ -64,6 +80,12 @@ async function setDolarBlueHandler(req, res) {
 
   try {
     await withTransaction(async (client) => {
+      const { rows: prevRows } = await client.query(
+        'SELECT valor_num FROM parametros_sistema WHERE clave = $1 LIMIT 1',
+        ['dolar_blue']
+      );
+      const prevValor = Number(prevRows?.[0]?.valor_num || 0);
+      const ratio = prevValor > 0 ? valor / prevValor : null;
       // 1) Actualizar parámetro de sistema
       await client.query(
         `INSERT INTO parametros_sistema(clave, valor_num, usuario_id)
@@ -87,10 +109,39 @@ async function setDolarBlueHandler(req, res) {
                 precio_venta = ROUND(precio_costo_dolares * $1 * (1 + margen_local), 2),
                 actualizado_en = CURRENT_TIMESTAMP
           WHERE activo = TRUE
-            AND precio_costo_dolares > 0`
+            AND precio_costo_dolares > 0
+            AND COALESCE(precio_modo, 'auto') <> 'manual'`
         ,
         [valor]
       );
+
+      if (ratio && Number.isFinite(ratio)) {
+        await client.query(
+          `UPDATE productos
+              SET tipo_cambio = $1,
+                  precio_costo = ROUND(precio_costo_dolares * $1, 2),
+                  precio_costo_pesos = ROUND(precio_costo_dolares * $1, 2),
+                  precio_local = ROUND(precio_local * $2, 2),
+                  precio_distribuidor = ROUND(precio_distribuidor * $2, 2),
+                  precio_final = ROUND(precio_final * $2, 2),
+                  precio_venta = ROUND(precio_venta * $2, 2),
+                  actualizado_en = CURRENT_TIMESTAMP
+          WHERE activo = TRUE
+            AND COALESCE(precio_modo, 'auto') = 'manual'`,
+          [valor, ratio]
+        );
+      } else {
+        await client.query(
+          `UPDATE productos
+              SET tipo_cambio = $1,
+                  precio_costo = ROUND(precio_costo_dolares * $1, 2),
+                  precio_costo_pesos = ROUND(precio_costo_dolares * $1, 2),
+                  actualizado_en = CURRENT_TIMESTAMP
+            WHERE activo = TRUE
+              AND COALESCE(precio_modo, 'auto') = 'manual'`,
+          [valor]
+        );
+      }
 
       // 3) Registrar historial de precios para trazabilidad
       await client.query(
@@ -114,8 +165,8 @@ async function setDolarBlueHandler(req, res) {
            $1 AS tipo_cambio,
            p.margen_local,
            p.margen_distribuidor,
-           ROUND(p.precio_costo_dolares * $1 * (1 + p.margen_local), 2) AS precio_local,
-           ROUND(p.precio_costo_dolares * $1 * (1 + p.margen_distribuidor), 2) AS precio_distribuidor,
+           p.precio_local AS precio_local,
+           p.precio_distribuidor AS precio_distribuidor,
            $2 AS usuario_id
          FROM productos p
          WHERE p.activo = TRUE
@@ -166,11 +217,94 @@ async function setDebtThresholdHandler(req, res) {
   }
 }
 
+async function getPriceLabels(req, res) {
+  try {
+    const [local, distribuidor, finalLabel] = await Promise.all([
+      configRepo.getTextParam(PRICE_LABEL_KEYS.local),
+      configRepo.getTextParam(PRICE_LABEL_KEYS.distribuidor),
+      configRepo.getTextParam(PRICE_LABEL_KEYS.final),
+    ]);
+    res.json({
+      local: local || PRICE_LABEL_DEFAULTS.local,
+      distribuidor: distribuidor || PRICE_LABEL_DEFAULTS.distribuidor,
+      final: finalLabel || PRICE_LABEL_DEFAULTS.final,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudieron obtener los nombres de precios' });
+  }
+}
+
+const validateSetPriceLabels = [
+  check('local').optional().isString().isLength({ min: 1, max: 120 }),
+  check('distribuidor').optional().isString().isLength({ min: 1, max: 120 }),
+  check('final').optional().isString().isLength({ min: 1, max: 120 }),
+];
+
+async function setPriceLabelsHandler(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const usuarioId =
+    req.user?.sub && Number.isFinite(Number(req.user.sub))
+      ? Number(req.user.sub)
+      : null;
+  try {
+    const { local, distribuidor, final: finalLabel } = req.body || {};
+    if (typeof local !== 'undefined') {
+      await configRepo.setTextParam(PRICE_LABEL_KEYS.local, String(local).trim(), usuarioId);
+    }
+    if (typeof distribuidor !== 'undefined') {
+      await configRepo.setTextParam(PRICE_LABEL_KEYS.distribuidor, String(distribuidor).trim(), usuarioId);
+    }
+    if (typeof finalLabel !== 'undefined') {
+      await configRepo.setTextParam(PRICE_LABEL_KEYS.final, String(finalLabel).trim(), usuarioId);
+    }
+    return getPriceLabels(req, res);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudieron guardar los nombres de precios' });
+  }
+}
+
+async function getRankingMetric(req, res) {
+  try {
+    const value = await configRepo.getTextParam(RANKING_METRIC_KEY);
+    const normalized = RANKING_METRIC_OPTIONS.includes(String(value || '').trim())
+      ? String(value).trim()
+      : RANKING_METRIC_DEFAULT;
+    res.json({ clave: RANKING_METRIC_KEY, valor: normalized });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo obtener la configuracion de ranking' });
+  }
+}
+
+const validateSetRankingMetric = [
+  check('valor').isIn(RANKING_METRIC_OPTIONS),
+];
+
+async function setRankingMetric(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const usuarioId =
+    req.user?.sub && Number.isFinite(Number(req.user.sub))
+      ? Number(req.user.sub)
+      : null;
+  try {
+    const value = String(req.body?.valor || '').trim();
+    await configRepo.setTextParam(RANKING_METRIC_KEY, value, usuarioId);
+    res.json({ clave: RANKING_METRIC_KEY, valor: value });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo guardar la configuracion de ranking' });
+  }
+}
+
 module.exports = {
   getDolarBlue,
   setDolarBlue: [...validateSetDolarBlue, setDolarBlueHandler],
   getDebtThreshold,
   setDebtThreshold: [...validateSetDebtThreshold, setDebtThresholdHandler],
+  getPriceLabels,
+  setPriceLabels: [...validateSetPriceLabels, setPriceLabelsHandler],
+  getRankingMetric,
+  setRankingMetric: [...validateSetRankingMetric, setRankingMetric],
   getNetworkPolicy: getNetworkPolicyHandler,
   setNetworkPolicy: setNetworkPolicyHandler,
   resetPanelData: resetPanelDataHandler,
@@ -203,12 +337,14 @@ async function resetPanelDataHandler(req, res) {
           'recepciones',
           'compras',
           'ventas_detalle',
+          'pagos_metodos',
           'pagos',
           'facturas',
           'ventas',
           'gastos',
           'inversiones',
           'pagos_proveedores',
+          'metodos_pago',
           'proveedores',
           'categorias',
           'productos',

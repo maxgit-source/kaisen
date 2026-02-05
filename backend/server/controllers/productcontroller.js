@@ -1,5 +1,286 @@
 const { check, validationResult } = require('express-validator');
+const path = require('path');
+const { Readable } = require('stream');
+const ExcelJS = require('exceljs');
 const repo = require('../db/repositories/productRepository');
+const categoryRepo = require('../db/repositories/categoryRepository');
+
+const HEADER_ALIASES = {
+  name: [
+    'nombre',
+    'name',
+    'producto',
+    'product',
+    'item',
+    'producto_nombre',
+    'nombre_producto',
+    'nombre_del_producto',
+    'nombre_de_producto',
+    'articulo',
+  ],
+  category: ['categoria', 'category', 'rubro', 'grupo', 'familia'],
+  category_id: ['categoria_id', 'category_id', 'id_categoria', 'idcategory'],
+  codigo: ['codigo', 'sku', 'code', 'barcode', 'cod'],
+  description: ['descripcion', 'description', 'detalle', 'desc'],
+  price: ['precio', 'precio_venta', 'price', 'precio venta', 'precio venta base'],
+  precio_final: ['precio_final', 'precio final', 'final'],
+  costo_pesos: ['costo_pesos', 'costo pesos', 'precio_costo_pesos', 'costo_ars', 'costo ars', 'costo'],
+  costo_dolares: ['costo_dolares', 'costo dolares', 'precio_costo_dolares', 'costo_usd', 'costo usd'],
+  tipo_cambio: ['tipo_cambio', 'tipo cambio', 'tc', 'exchange_rate'],
+  margen_local: ['margen_local', 'margen local', 'margen', 'markup'],
+  margen_distribuidor: ['margen_distribuidor', 'margen distribuidor', 'margen mayorista'],
+  stock_quantity: ['stock', 'stock_inicial', 'cantidad', 'cantidad_inicial', 'inventario', 'stock_quantity'],
+  image_url: ['image_url', 'imagen', 'imagen_url', 'image', 'foto', 'url_imagen'],
+  marca: ['marca', 'brand'],
+  modelo: ['modelo', 'model'],
+  procesador: ['procesador', 'cpu', 'processor'],
+  ram_gb: ['ram', 'ram_gb', 'ram gb'],
+  almacenamiento_gb: ['almacenamiento', 'almacenamiento_gb', 'storage', 'storage_gb'],
+  pantalla_pulgadas: ['pantalla', 'pantalla_pulgadas', 'screen', 'screen_inches'],
+  camara_mp: ['camara', 'camara_mp', 'camera', 'camera_mp'],
+  bateria_mah: ['bateria', 'bateria_mah', 'battery', 'battery_mah'],
+};
+
+const HEADER_LOOKUP = (() => {
+  const map = new Map();
+  for (const [key, aliases] of Object.entries(HEADER_ALIASES)) {
+    for (const alias of aliases) {
+      map.set(normalizeHeader(alias), key);
+    }
+  }
+  return map;
+})();
+
+function normalizeHeader(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function cleanHeading(text) {
+  return normalizeText(text).replace(/[:.]+$/g, '');
+}
+
+function isNoiseHeading(text) {
+  const norm = normalizeHeader(text);
+  return (
+    norm === 'productos' ||
+    norm === 'imagenes' ||
+    norm === 'imagenes_de_los_productos' ||
+    norm === 'imagenes_de_productos'
+  );
+}
+
+function extractCellValue(cell) {
+  if (!cell) return '';
+  const value = cell.value;
+  if (value === null || typeof value === 'undefined') return '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((v) => v.text || '').join('');
+    }
+    if (typeof value.result !== 'undefined') return value.result;
+    if (typeof value.formula === 'string' && typeof value.result !== 'undefined') return value.result;
+    if (typeof value.hyperlink === 'string') return value.text || value.hyperlink;
+  }
+  return value;
+}
+
+function parseNumber(raw) {
+  if (raw === null || typeof raw === 'undefined') return null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  const rawStr = String(raw).trim();
+  if (!rawStr) return null;
+  let s = rawStr.replace(/[^\d,.\-]/g, '');
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  if (lastComma > -1 && lastDot > -1) {
+    if (lastComma > lastDot) {
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      s = s.replace(/,/g, '');
+    }
+  } else if (lastComma > -1) {
+    const parts = s.split(',');
+    if (parts.length === 2 && parts[1].length <= 3) {
+      s = `${parts[0].replace(/\./g, '')}.${parts[1]}`;
+    } else {
+      s = s.replace(/,/g, '');
+    }
+  } else if (lastDot > -1) {
+    const parts = s.split('.');
+    if (parts.length === 2 && parts[1].length === 3) {
+      s = s.replace(/\./g, '');
+    }
+  } else {
+    s = s.replace(/,/g, '');
+  }
+  const num = Number(s);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizeMargin(raw) {
+  const num = parseNumber(raw);
+  if (num === null) return null;
+  return num > 1 ? num / 100 : num;
+}
+
+async function loadWorksheet(file) {
+  const workbook = new ExcelJS.Workbook();
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const isCsv =
+    ext === '.csv' ||
+    String(file.mimetype || '').toLowerCase().includes('csv') ||
+    String(file.mimetype || '').toLowerCase() === 'text/plain';
+  if (isCsv) {
+    const stream = Readable.from(file.buffer);
+    await workbook.csv.read(stream);
+  } else {
+    await workbook.xlsx.load(file.buffer);
+  }
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    throw new Error('No se encontró una hoja en el archivo');
+  }
+  return worksheet;
+}
+
+function buildColumnMap(headerRow) {
+  const map = {};
+  const maxCol = Math.max(headerRow.cellCount || 0, headerRow.actualCellCount || 0);
+  for (let col = 1; col <= maxCol; col += 1) {
+    const raw = extractCellValue(headerRow.getCell(col));
+    const normalized = normalizeHeader(raw);
+    if (!normalized) continue;
+    const field = HEADER_LOOKUP.get(normalized);
+    if (field && !map[field]) {
+      map[field] = col;
+    }
+  }
+  return map;
+}
+
+function scoreColumnMap(map) {
+  let score = 0;
+  if (map.name) score += 2;
+  if (map.category || map.category_id) score += 2;
+  if (map.price) score += 1;
+  if (map.costo_pesos || map.costo_dolares) score += 1;
+  return score;
+}
+
+function findHeaderRow(worksheet) {
+  const maxScan = Math.min(10, worksheet.rowCount || 1);
+  let best = { rowIndex: 1, map: {}, score: 0 };
+  for (let i = 1; i <= maxScan; i += 1) {
+    const row = worksheet.getRow(i);
+    if (!row || row.actualCellCount === 0) continue;
+    const map = buildColumnMap(row);
+    const score = scoreColumnMap(map);
+    if (score > best.score) {
+      best = { rowIndex: i, map, score };
+    }
+  }
+  return best;
+}
+
+function extractFallbackRows(worksheet, { fallbackCategory }) {
+  const items = [];
+  let currentCategory = fallbackCategory || null;
+  let pendingName = null;
+
+  const lastRow = worksheet.rowCount || 0;
+  for (let rowIndex = 1; rowIndex <= lastRow; rowIndex += 1) {
+    const row = worksheet.getRow(rowIndex);
+    if (!row || row.actualCellCount === 0) continue;
+
+    const texts = [];
+    let hasLetters = false;
+    let priceCandidate = null;
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      const raw = extractCellValue(cell);
+      if (raw === null || typeof raw === 'undefined') return;
+      const rawStr = String(raw).trim();
+      if (!rawStr) return;
+      const num = parseNumber(rawStr);
+      if (num != null && num > 0 && priceCandidate == null) {
+        priceCandidate = num;
+      }
+      if (/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(rawStr)) {
+        hasLetters = true;
+        texts.push(rawStr);
+      } else if (num == null) {
+        texts.push(rawStr);
+      }
+    });
+
+    const text = normalizeText(texts.join(' '));
+    if (!text && priceCandidate == null) continue;
+
+    const headingType = !priceCandidate
+      ? (() => {
+          if (!text) return null;
+          if (isNoiseHeading(text)) return 'noise';
+          const clean = cleanHeading(text);
+          const upper = clean === clean.toUpperCase();
+          const wordCount = clean.split(' ').length;
+          if (upper && wordCount <= 8) return 'category';
+          if (/[:.]$/.test(text) && wordCount <= 8) return 'category';
+          return null;
+        })()
+      : null;
+
+    if (headingType === 'noise') {
+      pendingName = null;
+      continue;
+    }
+    if (headingType === 'category') {
+      currentCategory = cleanHeading(text);
+      pendingName = null;
+      continue;
+    }
+
+    if (hasLetters && priceCandidate != null) {
+      items.push({
+        rowIndex,
+        name: text,
+        price: priceCandidate,
+        category: currentCategory,
+      });
+      pendingName = null;
+      continue;
+    }
+
+    if (hasLetters && priceCandidate == null) {
+      pendingName = { rowIndex, name: text };
+      continue;
+    }
+
+    if (!hasLetters && priceCandidate != null) {
+      if (pendingName) {
+        items.push({
+          rowIndex: pendingName.rowIndex,
+          name: pendingName.name,
+          price: priceCandidate,
+          category: currentCategory,
+        });
+        pendingName = null;
+      }
+    }
+  }
+
+  return items;
+}
 
 async function getProducts(req, res) {
   try {
@@ -37,6 +318,8 @@ async function getProducts(req, res) {
       tipo_cambio: r.tipo_cambio,
       margen_local: r.margen_local,
       margen_distribuidor: r.margen_distribuidor,
+      comision_pct: r.comision_pct,
+      precio_modo: r.precio_modo,
       price_local: r.price_local,
       price_distribuidor: r.price_distribuidor,
       precio_final: r.precio_final,
@@ -79,8 +362,8 @@ const validateProduct = [
     .isLength({ min: 3, max: 50 }).withMessage('codigo must be 3-50 chars')
     .isString().withMessage('codigo must be a string'),
   check('image_url')
+    .optional()
     .trim()
-    .notEmpty().withMessage('Image URL is required')
     .isString().withMessage('Image URL must be a string'),
   check('category_id')
     .notEmpty().withMessage('category_id is required')
@@ -106,6 +389,19 @@ const validateProduct = [
   check('margen_distribuidor')
     .optional()
     .isFloat({ min: 0 }).withMessage('margen_distribuidor must be >= 0'),
+  check('precio_modo')
+    .optional()
+    .isIn(['auto', 'manual'])
+    .withMessage('precio_modo must be auto or manual'),
+  check('price_local')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('price_local must be >= 0'),
+  check('price_distribuidor')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('price_distribuidor must be >= 0'),
+  check('comision_pct')
+    .optional()
+    .isFloat({ min: 0, max: 100 }).withMessage('comision_pct must be between 0 and 100'),
   check('proveedor_id')
     .optional({ nullable: true })
     .isInt({ min: 1 }).withMessage('proveedor_id must be an integer >= 1'),
@@ -143,6 +439,10 @@ async function createProduct(req, res) {
     tipo_cambio,
     margen_local,
     margen_distribuidor,
+    comision_pct,
+    precio_modo,
+    price_local,
+    price_distribuidor,
     proveedor_id,
     precio_final,
     marca,
@@ -169,6 +469,10 @@ async function createProduct(req, res) {
       tipo_cambio,
       margen_local,
       margen_distribuidor,
+      comision_pct,
+      precio_modo,
+      price_local,
+      price_distribuidor,
       proveedor_id,
       precio_final,
       marca,
@@ -213,6 +517,10 @@ async function updateProduct(req, res) {
     tipo_cambio,
     margen_local,
     margen_distribuidor,
+    comision_pct,
+    precio_modo,
+    price_local,
+    price_distribuidor,
     proveedor_id,
     precio_final,
     marca,
@@ -243,6 +551,10 @@ async function updateProduct(req, res) {
       tipo_cambio,
       margen_local,
       margen_distribuidor,
+      comision_pct,
+      precio_modo,
+      price_local,
+      price_distribuidor,
       proveedor_id,
       precio_final,
       marca,
@@ -319,6 +631,429 @@ async function getProductByCodigo(req, res) {
   }
 }
 
+async function importProducts(req, res) {
+  const file = req.file;
+  if (!file || !file.buffer) {
+    return res.status(400).json({ error: 'Archivo requerido (xlsx o csv)' });
+  }
+
+  const dryRun =
+    String(req.query.dry_run || req.query.preview || '').trim() === '1';
+
+  try {
+    const worksheet = await loadWorksheet(file);
+    const headerInfo = findHeaderRow(worksheet);
+    const headerRow = worksheet.getRow(headerInfo.rowIndex);
+    const columnMap = headerInfo.map;
+    const fallbackCategory = (() => {
+      const base = path.parse(file.originalname || '').name;
+      const fromFile = cleanHeading(normalizeText(base.replace(/[_-]+/g, ' ')));
+      if (fromFile && !isNoiseHeading(fromFile) && fromFile.length >= 2) return fromFile;
+      const fromSheet = cleanHeading(normalizeText(worksheet.name || ''));
+      if (fromSheet && !isNoiseHeading(fromSheet) && fromSheet.length >= 2) return fromSheet;
+      return null;
+    })();
+
+    let useFallback = false;
+    let fallbackItems = [];
+    if (!columnMap.name || (!columnMap.category && !columnMap.category_id)) {
+      fallbackItems = extractFallbackRows(worksheet, { fallbackCategory });
+      if (!fallbackItems.length) {
+        return res.status(400).json({
+          error: 'Falta la columna de nombre de producto',
+          detalle: 'No se detectaron encabezados ni datos simples. Usa encabezados o un formato simple (nombre + precio).',
+        });
+      }
+      useFallback = true;
+    }
+
+    const errors = [];
+    const skipped = [];
+    const preview = [];
+    const seenCodes = new Set();
+    const seenNameCategory = new Set();
+    const existingCodeCache = new Map();
+    const existingNameCatCache = new Map();
+    const categoryCache = new Map();
+    let created = 0;
+    let wouldCreate = 0;
+    let skippedCount = 0;
+    let categoryCreated = 0;
+    let categoryRestored = 0;
+    let rowCount = 0;
+
+    async function resolveCategoryId({ categoryName, categoryId }) {
+      if (categoryId && Number.isInteger(categoryId) && categoryId > 0) {
+        const cacheKey = `id:${categoryId}`;
+        if (categoryCache.has(cacheKey)) return categoryCache.get(cacheKey);
+        const existing = await categoryRepo.findById(categoryId);
+        if (!existing) return null;
+        categoryCache.set(cacheKey, existing);
+        return existing;
+      }
+
+      const nameKey = normalizeText(categoryName).toLowerCase();
+      if (categoryCache.has(nameKey)) return categoryCache.get(nameKey);
+      const existing = await categoryRepo.findByName(categoryName);
+      categoryCache.set(nameKey, existing || null);
+      return existing || null;
+    }
+
+    async function ensureCategory({ categoryName }) {
+      const nameKey = normalizeText(categoryName).toLowerCase();
+      if (categoryCache.has(nameKey) && categoryCache.get(nameKey)) {
+        return categoryCache.get(nameKey);
+      }
+      const existing = await categoryRepo.findByName(categoryName);
+      if (existing) {
+        categoryCache.set(nameKey, existing);
+        if (!existing.activo) {
+          const restored = await categoryRepo.restoreOrInsert({
+            name: normalizeText(categoryName),
+            image_url: null,
+            description: null,
+          });
+          categoryRestored += 1;
+          const refreshed = await categoryRepo.findByName(categoryName);
+          categoryCache.set(nameKey, refreshed);
+          return refreshed;
+        }
+        return existing;
+      }
+      const createdCat = await categoryRepo.restoreOrInsert({
+        name: normalizeText(categoryName),
+        image_url: null,
+        description: null,
+      });
+      categoryCreated += 1;
+      const refreshed = await categoryRepo.findByName(categoryName);
+      categoryCache.set(nameKey, refreshed);
+      return refreshed;
+    }
+
+    async function existsByCodigo(codigo) {
+      if (!codigo) return false;
+      const key = codigo.toLowerCase();
+      if (existingCodeCache.has(key)) return existingCodeCache.get(key);
+      const found = await repo.findByCodigo(codigo);
+      const exists = Boolean(found && found.id);
+      existingCodeCache.set(key, exists);
+      return exists;
+    }
+
+    async function existsByNameCategory(name, categoryId) {
+      if (!name || !categoryId) return false;
+      const key = `${name.toLowerCase()}|${categoryId}`;
+      if (existingNameCatCache.has(key)) return existingNameCatCache.get(key);
+      const found = await repo.findByNameCategory(name, categoryId);
+      const exists = Boolean(found);
+      existingNameCatCache.set(key, exists);
+      return exists;
+    }
+
+    const lastRow = worksheet.rowCount || 0;
+    const startRow = headerInfo.rowIndex + 1;
+
+    if (useFallback) {
+      rowCount = fallbackItems.length;
+      for (const item of fallbackItems) {
+        const rowIndex = item.rowIndex;
+        const name = normalizeText(item.name);
+        const categoryName = normalizeText(item.category || fallbackCategory || '');
+        const price = parseNumber(item.price);
+
+        if (!name) {
+          errors.push({ row: rowIndex, field: 'nombre', message: 'Nombre requerido' });
+          continue;
+        }
+        if (!categoryName) {
+          errors.push({ row: rowIndex, field: 'categoria', message: 'Categoría requerida' });
+          continue;
+        }
+        if (!price || price <= 0) {
+          errors.push({ row: rowIndex, field: 'precio', message: 'Precio requerido' });
+          continue;
+        }
+
+        let categoryRecord = await resolveCategoryId({ categoryName });
+        if (!categoryRecord && !dryRun) {
+          categoryRecord = await ensureCategory({ categoryName });
+        }
+        if (!categoryRecord && dryRun) {
+          categoryRecord = { id: null, name: categoryName, activo: false, pending: true };
+        }
+
+        const categoryIdFinal = categoryRecord?.id ? Number(categoryRecord.id) : null;
+        if (!categoryIdFinal && !dryRun) {
+          errors.push({ row: rowIndex, field: 'categoria', message: 'No se pudo resolver la categoría' });
+          continue;
+        }
+
+        const nameKey = `${name.toLowerCase()}|${categoryIdFinal || categoryName.toLowerCase()}`;
+        if (seenNameCategory.has(nameKey)) {
+          skipped.push({ row: rowIndex, reason: 'Duplicado en archivo', name, category: categoryName });
+          skippedCount += 1;
+          continue;
+        }
+        const existsByName = categoryIdFinal
+          ? await existsByNameCategory(name, categoryIdFinal)
+          : false;
+        if (existsByName) {
+          skipped.push({ row: rowIndex, reason: 'Duplicado en sistema', name, category: categoryName });
+          skippedCount += 1;
+          continue;
+        }
+        seenNameCategory.add(nameKey);
+
+        const payload = {
+          name,
+          description: undefined,
+          price,
+          image_url: undefined,
+          category_id: categoryIdFinal || undefined,
+        };
+
+        if (dryRun) {
+          wouldCreate += 1;
+          preview.push({
+            row: rowIndex,
+            name,
+            codigo: null,
+            categoria: categoryName,
+            precio: price,
+            costo_pesos: null,
+            costo_dolares: null,
+            stock: 0,
+            image_url: null,
+          });
+          continue;
+        }
+
+        try {
+          await repo.createProduct(payload);
+          created += 1;
+        } catch (err) {
+          errors.push({
+            row: rowIndex,
+            field: 'producto',
+            message: err?.message || 'No se pudo crear el producto',
+          });
+        }
+      }
+    } else {
+      for (let rowIndex = startRow; rowIndex <= lastRow; rowIndex += 1) {
+        const row = worksheet.getRow(rowIndex);
+        if (!row || row.actualCellCount === 0) continue;
+        rowCount += 1;
+
+        const name = normalizeText(extractCellValue(row.getCell(columnMap.name)));
+        const categoryName = columnMap.category
+          ? normalizeText(extractCellValue(row.getCell(columnMap.category)))
+          : '';
+        const categoryIdRaw = columnMap.category_id
+          ? extractCellValue(row.getCell(columnMap.category_id))
+          : null;
+        const categoryId = categoryIdRaw ? Number(parseNumber(categoryIdRaw)) : null;
+        const codigo = columnMap.codigo
+          ? normalizeText(extractCellValue(row.getCell(columnMap.codigo)))
+          : '';
+        const description = columnMap.description
+          ? normalizeText(extractCellValue(row.getCell(columnMap.description)))
+          : '';
+        const price = columnMap.price ? parseNumber(extractCellValue(row.getCell(columnMap.price))) : null;
+        const precioFinal = columnMap.precio_final
+          ? parseNumber(extractCellValue(row.getCell(columnMap.precio_final)))
+          : null;
+        const costoPesos = columnMap.costo_pesos
+          ? parseNumber(extractCellValue(row.getCell(columnMap.costo_pesos)))
+          : null;
+        const costoDolares = columnMap.costo_dolares
+          ? parseNumber(extractCellValue(row.getCell(columnMap.costo_dolares)))
+          : null;
+        const tipoCambio = columnMap.tipo_cambio
+          ? parseNumber(extractCellValue(row.getCell(columnMap.tipo_cambio)))
+          : null;
+        const margenLocal = columnMap.margen_local
+          ? normalizeMargin(extractCellValue(row.getCell(columnMap.margen_local)))
+          : null;
+        const margenDistribuidor = columnMap.margen_distribuidor
+          ? normalizeMargin(extractCellValue(row.getCell(columnMap.margen_distribuidor)))
+          : null;
+        const stockQuantity = columnMap.stock_quantity
+          ? parseNumber(extractCellValue(row.getCell(columnMap.stock_quantity)))
+          : null;
+        const imageUrl = columnMap.image_url
+          ? normalizeText(extractCellValue(row.getCell(columnMap.image_url)))
+          : '';
+        const marca = columnMap.marca ? normalizeText(extractCellValue(row.getCell(columnMap.marca))) : '';
+        const modelo = columnMap.modelo ? normalizeText(extractCellValue(row.getCell(columnMap.modelo))) : '';
+        const procesador = columnMap.procesador ? normalizeText(extractCellValue(row.getCell(columnMap.procesador))) : '';
+        const ramGb = columnMap.ram_gb ? parseNumber(extractCellValue(row.getCell(columnMap.ram_gb))) : null;
+        const almacenamientoGb = columnMap.almacenamiento_gb
+          ? parseNumber(extractCellValue(row.getCell(columnMap.almacenamiento_gb)))
+          : null;
+        const pantallaPulgadas = columnMap.pantalla_pulgadas
+          ? parseNumber(extractCellValue(row.getCell(columnMap.pantalla_pulgadas)))
+          : null;
+        const camaraMp = columnMap.camara_mp ? parseNumber(extractCellValue(row.getCell(columnMap.camara_mp))) : null;
+        const bateriaMah = columnMap.bateria_mah ? parseNumber(extractCellValue(row.getCell(columnMap.bateria_mah))) : null;
+
+      if (!name) {
+        errors.push({ row: rowIndex, field: 'nombre', message: 'Nombre requerido' });
+        continue;
+      }
+
+      if (!categoryName && (!categoryId || !Number.isInteger(categoryId))) {
+        errors.push({ row: rowIndex, field: 'categoria', message: 'Categoría requerida' });
+        continue;
+      }
+
+      const hasPriceData =
+        (price && price > 0) ||
+        (precioFinal && precioFinal > 0) ||
+        (costoPesos && costoPesos > 0) ||
+        (costoDolares && costoDolares > 0);
+      if (!hasPriceData) {
+        errors.push({
+          row: rowIndex,
+          field: 'precio',
+          message: 'Debe incluir precio o costo (pesos o dólares)',
+        });
+        continue;
+      }
+
+      const normalizedCode = codigo ? codigo.toLowerCase() : '';
+      if (normalizedCode) {
+        if (seenCodes.has(normalizedCode)) {
+          skipped.push({ row: rowIndex, reason: 'Duplicado en archivo', codigo, name, category: categoryName });
+          skippedCount += 1;
+          continue;
+        }
+      }
+
+      let categoryRecord = null;
+      if (categoryId && Number.isInteger(categoryId) && categoryId > 0) {
+        categoryRecord = await resolveCategoryId({ categoryId });
+        if (!categoryRecord) {
+          errors.push({ row: rowIndex, field: 'categoria_id', message: 'Categoría no encontrada' });
+          continue;
+        }
+      } else {
+        categoryRecord = await resolveCategoryId({ categoryName });
+        if (!categoryRecord && !dryRun) {
+          categoryRecord = await ensureCategory({ categoryName });
+        }
+        if (!categoryRecord && dryRun) {
+          categoryRecord = { id: null, name: categoryName, activo: false, pending: true };
+        }
+      }
+
+      const categoryIdFinal = categoryRecord?.id ? Number(categoryRecord.id) : null;
+      if (!categoryIdFinal && !dryRun) {
+        errors.push({ row: rowIndex, field: 'categoria', message: 'No se pudo resolver la categoría' });
+        continue;
+      }
+
+      const nameKey = `${name.toLowerCase()}|${categoryIdFinal || normalizeText(categoryName).toLowerCase()}`;
+      if (!normalizedCode && seenNameCategory.has(nameKey)) {
+        skipped.push({ row: rowIndex, reason: 'Duplicado en archivo', name, category: categoryName });
+        skippedCount += 1;
+        continue;
+      }
+
+      if (normalizedCode) {
+        const exists = await existsByCodigo(codigo);
+        if (exists) {
+          skipped.push({ row: rowIndex, reason: 'Duplicado en sistema', codigo, name, category: categoryName });
+          skippedCount += 1;
+          continue;
+        }
+      } else if (categoryIdFinal) {
+        const existsByName = await existsByNameCategory(name, categoryIdFinal);
+        if (existsByName) {
+          skipped.push({ row: rowIndex, reason: 'Duplicado en sistema', name, category: categoryName });
+          skippedCount += 1;
+          continue;
+        }
+      }
+
+      if (normalizedCode) seenCodes.add(normalizedCode);
+      if (!normalizedCode) seenNameCategory.add(nameKey);
+
+      const payload = {
+        name,
+        codigo: codigo || undefined,
+        description: description || undefined,
+        price: price && price > 0 ? price : (precioFinal && precioFinal > 0 ? precioFinal : undefined),
+        image_url: imageUrl || undefined,
+        category_id: categoryIdFinal || undefined,
+        stock_quantity: Number.isFinite(Number(stockQuantity)) ? Math.max(0, Number(stockQuantity)) : undefined,
+        precio_costo_pesos: costoPesos && costoPesos > 0 ? costoPesos : undefined,
+        precio_costo_dolares: costoDolares && costoDolares > 0 ? costoDolares : undefined,
+        tipo_cambio: tipoCambio && tipoCambio > 0 ? tipoCambio : undefined,
+        margen_local: margenLocal != null ? margenLocal : undefined,
+        margen_distribuidor: margenDistribuidor != null ? margenDistribuidor : undefined,
+        precio_final: precioFinal && precioFinal > 0 ? precioFinal : undefined,
+        marca: marca || undefined,
+        modelo: modelo || undefined,
+        procesador: procesador || undefined,
+        ram_gb: ramGb != null ? Math.max(0, Number(ramGb)) : undefined,
+        almacenamiento_gb: almacenamientoGb != null ? Math.max(0, Number(almacenamientoGb)) : undefined,
+        pantalla_pulgadas: pantallaPulgadas != null ? Math.max(0, Number(pantallaPulgadas)) : undefined,
+        camara_mp: camaraMp != null ? Math.max(0, Number(camaraMp)) : undefined,
+        bateria_mah: bateriaMah != null ? Math.max(0, Number(bateriaMah)) : undefined,
+      };
+
+        if (dryRun) {
+          wouldCreate += 1;
+          preview.push({
+            row: rowIndex,
+            name,
+            codigo: codigo || null,
+            categoria: categoryName || categoryRecord?.nombre || categoryRecord?.name || null,
+            precio: payload.price ?? null,
+            costo_pesos: payload.precio_costo_pesos ?? null,
+            costo_dolares: payload.precio_costo_dolares ?? null,
+            stock: payload.stock_quantity ?? 0,
+            image_url: payload.image_url || null,
+          });
+          continue;
+        }
+
+        try {
+          await repo.createProduct(payload);
+          created += 1;
+        } catch (err) {
+          errors.push({
+            row: rowIndex,
+            field: 'producto',
+            message: err?.message || 'No se pudo crear el producto',
+          });
+        }
+      }
+    }
+
+    return res.json({
+      dry_run: dryRun,
+      totals: {
+        rows: rowCount,
+        created,
+        would_create: wouldCreate,
+        skipped: skippedCount,
+        errors: errors.length,
+        categories_created: categoryCreated,
+        categories_restored: categoryRestored,
+      },
+      preview: preview.slice(0, 30),
+      skipped,
+      errors,
+    });
+  } catch (err) {
+    console.error('Error importando productos:', err);
+    return res.status(500).json({ error: 'No se pudo importar el archivo' });
+  }
+}
+
 module.exports = {
   getProducts,
   createProduct: [...validateProduct, createProduct],
@@ -326,4 +1061,5 @@ module.exports = {
   deleteProduct,
   getProductHistory,
   getProductByCodigo,
+  importProducts,
 };

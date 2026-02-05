@@ -1,11 +1,14 @@
 import { NavLink } from 'react-router-dom';
-import { BarChart3, Boxes, Settings, Users, Package, Home, Tag, Truck, FileText, Handshake } from 'lucide-react';
+import { BarChart3, Boxes, Settings, Users, Package, Home, Tag, Truck, FileText, Handshake, Wallet } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLicense } from '../context/LicenseContext';
 import { getRoleFromToken } from '../lib/auth';
+import { BRAND } from '../config/branding';
+import { hasFeature, type FeatureKey } from '../lib/features';
 
-const navItems = [
+const navItems: { to: string; label: string; icon: any; roles: string[]; feature?: FeatureKey }[] = [
   { to: '/app/dashboard', label: 'Dashboard', icon: Home, roles: ['admin', 'gerente', 'vendedor'] },
   { to: '/app/clientes', label: 'Clientes', icon: Users, roles: ['admin', 'gerente', 'vendedor'] },
   { to: '/app/productos', label: 'Productos', icon: Package, roles: ['admin', 'gerente', 'vendedor'] },
@@ -15,26 +18,40 @@ const navItems = [
   { to: '/app/proveedores', label: 'Proveedores', icon: Truck, roles: ['admin', 'gerente'] },
   { to: '/app/categorias', label: 'Categorias', icon: Tag, roles: ['admin', 'gerente'] },
   { to: '/app/catalogo', label: 'Catalogo', icon: Tag, roles: ['admin', 'gerente'] },
-  { to: '/app/multideposito', label: 'Multideposito', icon: Boxes, roles: ['admin', 'gerente'] },
-  { to: '/app/predicciones', label: 'Predicciones', icon: BarChart3, roles: ['admin', 'gerente'] },
-  { to: '/app/crm', label: 'CRM', icon: Users, roles: ['admin', 'gerente', 'vendedor'] },
-  { to: '/app/marketplace', label: 'Marketplace', icon: Handshake, roles: ['admin', 'gerente'] },
-  { to: '/app/arca', label: 'ARCA', icon: FileText, roles: ['admin', 'gerente'] },
-  { to: '/app/postventa', label: 'Postventa', icon: Package, roles: ['admin', 'gerente', 'vendedor'] },
+  { to: '/app/multideposito', label: 'Multideposito', icon: Boxes, roles: ['admin', 'gerente'], feature: 'multideposito' },
+  { to: '/app/predicciones', label: 'Predicciones', icon: BarChart3, roles: ['admin', 'gerente'], feature: 'ai' },
+  { to: '/app/crm', label: 'CRM', icon: Users, roles: ['admin', 'gerente', 'vendedor'], feature: 'crm' },
+  { to: '/app/marketplace', label: 'Marketplace', icon: Handshake, roles: ['admin', 'gerente'], feature: 'marketplace' },
+  { to: '/app/arca', label: 'ARCA', icon: FileText, roles: ['admin', 'gerente'], feature: 'arca' },
+  { to: '/app/postventa', label: 'Postventa', icon: Package, roles: ['admin', 'gerente', 'vendedor'], feature: 'postventa' },
   { to: '/app/finanzas', label: 'Finanzas', icon: BarChart3, roles: ['admin', 'gerente'] },
   { to: '/app/informes', label: 'Informes', icon: FileText, roles: ['admin', 'gerente'] },
-  { to: '/app/aprobaciones', label: 'Aprobaciones', icon: BarChart3, roles: ['admin', 'gerente'] },
-  { to: '/app/usuarios', label: 'Usuarios', icon: Users, roles: ['admin'] },
+  { to: '/app/aprobaciones', label: 'Aprobaciones', icon: BarChart3, roles: ['admin', 'gerente'], feature: 'aprobaciones' },
+  { to: '/app/usuarios', label: 'Usuarios', icon: Users, roles: ['admin'], feature: 'usuarios' },
+  { to: '/app/sueldos-vendedores', label: 'Sueldo a vendedores', icon: Wallet, roles: ['admin'], feature: 'usuarios' },
   { to: '/app/configuracion', label: 'Configuracion', icon: Settings, roles: ['admin'] },
 ];
 
 export default function Sidebar({ collapsed }: { collapsed?: boolean }) {
   const { accessToken } = useAuth();
+  const { status } = useLicense();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
   const items = useMemo(() => {
     if (!role) return navItems;
-    return navItems.filter((item) => !item.roles || item.roles.includes(role));
-  }, [role]);
+    return navItems.filter(
+      (item) =>
+        (!item.roles || item.roles.includes(role)) && hasFeature(status, item.feature)
+    );
+  }, [role, status]);
+  const initials = useMemo(() => {
+    return BRAND.name
+      .split(' ')
+      .filter(Boolean)
+      .map((word) => word[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+  }, []);
 
   return (
     <motion.aside
@@ -44,10 +61,12 @@ export default function Sidebar({ collapsed }: { collapsed?: boolean }) {
       style={{ overflow: 'hidden' }}
     >
       <div className="h-16 flex items-center gap-3 px-5 border-b border-white/10">
-        <div className="w-9 h-9 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">TC</div>
+        <div className="w-9 h-9 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
+          {initials || 'SA'}
+        </div>
         {!collapsed && (
           <div>
-            <div className="text-sm font-semibold">Tecnocel</div>
+            <div className="text-sm font-semibold">{BRAND.name}</div>
             <div className="text-[11px] text-slate-400">v1.0.0</div>
           </div>
         )}

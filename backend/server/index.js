@@ -51,15 +51,18 @@ const supplierRoutes = require('./routes/supplierroutes.js');
 const purchaseRoutes = require('./routes/purchaseroutes.js');
 const salesRoutes = require('./routes/salesroutes.js');
 const paymentRoutes = require('./routes/paymentroutes.js');
+const paymentMethodRoutes = require('./routes/paymentmethodroutes.js');
 const crmRoutes = require('./routes/crmroutes.js');
 const ticketRoutes = require('./routes/ticketroutes.js');
 const approvalRoutes = require('./routes/approvalroutes.js');
 const financeRoutes = require('./routes/financeroutes.js');
+const vendorPayrollRoutes = require('./routes/vendorpayrollroutes.js');
 const configRoutes = require('./routes/configroutes.js');
 const catalogRoutes = require('./routes/catalogroutes.js');
 const llmRoutes = require('./routes/llmroutes.js');
 const adminRoutes = require('./routes/adminroutes.js');
 const depositoRoutes = require('./routes/depositoroutes.js');
+const zonasRoutes = require('./routes/zonasroutes.js');
 const marketplaceRoutes = require('./routes/marketplaceroutes.js');
 const licenseRoutes = require('./routes/licenseroutes.js');
 const backupRoutes = require('./routes/backuproutes.js');
@@ -67,6 +70,7 @@ const arcaRoutes = require('./routes/arcaroutes.js');
 const cloudRoutes = require('./routes/cloudroutes.js');
 const backupService = require('./services/backupService');
 const cloudSyncService = require('./services/cloudSyncService');
+const licenseService = require('./services/licenseService');
 
 // ==============================
 //   CONFIG SERVER
@@ -124,6 +128,9 @@ app.use(
   })
 );
 
+// Log temprano para incluir rechazos por CORS
+app.use(loggingMiddleware);
+
 // ==============================
 //   CORS CONFIG
 // ==============================
@@ -131,13 +138,43 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(',').map((o) => o.trim())
   : [];
 
+const baseAllowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+if (process.env.PUBLIC_ORIGIN) {
+  try {
+    baseAllowedOrigins.push(new URL(process.env.PUBLIC_ORIGIN).origin);
+  } catch {}
+}
+
+const allowedOriginsSet = new Set(
+  [...baseAllowedOrigins, ...allowedOrigins].filter(Boolean)
+);
+
 const corsAllowAll =
   process.env.CORS_ALLOW_ALL === 'true' ||
   process.env.CORS_ALLOWED_ORIGINS === '*';
 
+const allowNullOrigin = process.env.CORS_ALLOW_NULL === 'true';
+
+function corsOrigin(origin, callback) {
+  if (corsAllowAll) return callback(null, true);
+  if (!origin) {
+    return allowNullOrigin
+      ? callback(null, true)
+      : callback(new Error('No permitido por CORS'));
+  }
+  if (allowedOriginsSet.has(origin)) return callback(null, true);
+  return callback(new Error('No permitido por CORS'));
+}
+
 app.use(
   cors({
-    origin: corsAllowAll ? true : allowedOrigins,
+    origin: corsAllowAll ? true : corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: false,
@@ -157,7 +194,6 @@ app.use(hpp());
 // ==============================
 //   LOG + PROTECCIÓN PATH TRAVERSAL
 // ==============================
-app.use(loggingMiddleware);
 app.use(pathTraversalProtection);
 app.use('/api', networkGuard);
 
@@ -199,14 +235,17 @@ app.use('/api', supplierRoutes);
 app.use('/api', purchaseRoutes);
 app.use('/api', salesRoutes);
 app.use('/api', paymentRoutes);
+app.use('/api', paymentMethodRoutes);
 app.use('/api', crmRoutes);
 app.use('/api', ticketRoutes);
 app.use('/api', approvalRoutes);
 app.use('/api', financeRoutes);
+app.use('/api', vendorPayrollRoutes);
 app.use('/api', configRoutes);
 app.use('/api', catalogRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', depositoRoutes);
+app.use('/api', zonasRoutes);
 app.use('/api', marketplaceRoutes);
 app.use('/api', licenseRoutes);
 app.use('/api', backupRoutes);
@@ -227,14 +266,16 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
 
   if (err.message === 'No permitido por CORS') {
-    return res.status(403).json({ error: 'Origen no permitido' });
+    return res.status(403).json({ error: 'Origen no permitido', request_id: req.id });
   }
 
   sendSMSNotification(
     `Error grave en servidor: ${err.message}. Ruta: ${req.originalUrl}`
   );
 
-  return res.status(500).json({ error: 'Error interno del servidor' });
+  return res
+    .status(500)
+    .json({ error: 'Error interno del servidor', request_id: req.id });
 });
 
 // ==============================
@@ -250,6 +291,9 @@ function startServer({ port = PORT, host = HOST } = {}) {
   server.headersTimeout = 66000;
   backupService.startBackupScheduler();
   cloudSyncService.startCloudSyncScheduler();
+  licenseService.ensureDemoStart().catch((err) => {
+    console.error('Error iniciando demo:', err?.message || err);
+  });
   return server;
 }
 

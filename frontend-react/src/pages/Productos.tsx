@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Api } from '../lib/api';
+import { usePriceLabels } from '../lib/priceLabels';
 import { uploadImageToCloudinary } from '../lib/cloudinary';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
@@ -14,6 +15,8 @@ type Producto = {
   image_url?: string | null;
   price: number;
   stock_quantity: number;
+  comision_pct?: number | null;
+  precio_modo?: 'auto' | 'manual' | null;
   costo_pesos?: number | null;
   costo_dolares?: number | null;
   tipo_cambio?: number | null;
@@ -22,14 +25,6 @@ type Producto = {
   price_local?: number | null;
   price_distribuidor?: number | null;
   precio_final?: number | null;
-  marca?: string | null;
-  modelo?: string | null;
-  procesador?: string | null;
-  ram_gb?: number | null;
-  almacenamiento_gb?: number | null;
-  pantalla_pulgadas?: number | null;
-  camara_mp?: number | null;
-  bateria_mah?: number | null;
 };
 
 type HistorialRow = {
@@ -56,20 +51,16 @@ type FormState = {
   image_url: string;
   category_id: string;
   stock_quantity: string;
+  comision_pct: string;
+  precio_modo: 'auto' | 'manual';
+  precio_local: string;
+  precio_distribuidor: string;
   costo_pesos: string;
   costo_dolares: string;
   tipo_cambio: string;
   margen_local: string;
   margen_distribuidor: string;
   precio_final: string;
-  marca: string;
-  modelo: string;
-  procesador: string;
-  ram_gb: string;
-  almacenamiento_gb: string;
-  pantalla_pulgadas: string;
-  camara_mp: string;
-  bateria_mah: string;
 };
 
 const emptyForm: FormState = {
@@ -80,23 +71,24 @@ const emptyForm: FormState = {
   image_url: '',
   category_id: '',
   stock_quantity: '',
+  comision_pct: '',
+  precio_modo: 'auto',
+  precio_local: '',
+  precio_distribuidor: '',
   costo_pesos: '',
   costo_dolares: '',
   tipo_cambio: '',
-  margen_local: '15',
-  margen_distribuidor: '45',
+  margen_local: '',
+  margen_distribuidor: '',
   precio_final: '',
-  marca: '',
-  modelo: '',
-  procesador: '',
-  ram_gb: '',
-  almacenamiento_gb: '',
-  pantalla_pulgadas: '',
-  camara_mp: '',
-  bateria_mah: '',
 };
 
+function buildEmptyForm(tipoCambio: string) {
+  return { ...emptyForm, tipo_cambio: tipoCambio || '' };
+}
+
 export default function Productos() {
+  const { labels: priceLabels } = usePriceLabels();
   const [productos, setProductos] = useState<Producto[]>([]);
   const [categorias, setCategorias] = useState<{ id: number; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,11 +96,16 @@ export default function Productos() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [search, setSearch] = useState('');
-  const [form, setForm] = useState<FormState>(emptyForm);
+  const [form, setForm] = useState<FormState>(() => buildEmptyForm(''));
   const [editingProducto, setEditingProducto] = useState<Producto | null>(null);
   const [codigoLookupMsg, setCodigoLookupMsg] = useState<string | null>(null);
   const [codigoLookupError, setCodigoLookupError] = useState<string | null>(null);
   const [codigoLookupLoading, setCodigoLookupLoading] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importResult, setImportResult] = useState<any | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
 
   const [historialProducto, setHistorialProducto] = useState<Producto | null>(null);
   const [historial, setHistorial] = useState<HistorialRow[]>([]);
@@ -156,11 +153,15 @@ export default function Productos() {
   const canSubmit = useMemo(() => {
     const hasCore =
       form.name &&
-      form.category_id &&
-      form.image_url;
+      form.category_id;
     const hasAnyCost =
       (form.costo_pesos && Number(form.costo_pesos || '0') > 0) ||
       (form.costo_dolares && Number(form.costo_dolares || '0') > 0);
+    const hasManualLocal =
+      form.precio_local !== '' && Number(form.precio_local || '0') > 0;
+    if (form.precio_modo === 'manual') {
+      return Boolean(hasCore && hasManualLocal);
+    }
     return Boolean(hasCore && hasAnyCost);
   }, [form]);
 
@@ -246,18 +247,49 @@ export default function Productos() {
     }
   }
 
+  async function runImport(dryRun: boolean) {
+    if (!importFile) {
+      setImportError('Selecciona un archivo .xlsx o .csv');
+      return;
+    }
+    setImportError(null);
+    setImportResult(null);
+    if (dryRun) {
+      setPreviewing(true);
+    } else {
+      setImporting(true);
+    }
+    try {
+      const result = await Api.importarProductosExcel(importFile, { dryRun });
+      setImportResult(result);
+      if (!dryRun) {
+        await load(currentPage);
+      }
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : 'No se pudo importar el archivo');
+    } finally {
+      setPreviewing(false);
+      setImporting(false);
+    }
+  }
+
   async function onSubmitForm(e: FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
     setError(null);
+    const priceMode = form.precio_modo === 'manual' ? 'manual' : 'auto';
     const payload: any = {
       name: form.name,
       codigo: form.codigo.trim() || undefined,
       description: form.description,
-      price: precioLocalCalc > 0 ? precioLocalCalc : undefined,
       image_url: form.image_url,
       category_id: Number(form.category_id),
       stock_quantity: Number(form.stock_quantity || '0'),
+      comision_pct:
+        form.comision_pct !== ''
+          ? Number(form.comision_pct) || 0
+          : undefined,
+      precio_modo: priceMode,
       precio_costo_pesos: costoPesosNumber || undefined,
       precio_costo_dolares: costoDolaresNumber || undefined,
       tipo_cambio: tipoCambioNumber || undefined,
@@ -267,24 +299,25 @@ export default function Productos() {
         form.precio_final !== ''
           ? Number(form.precio_final) || 0
           : undefined,
-      marca: form.marca || undefined,
-      modelo: form.modelo || undefined,
-      procesador: form.procesador || undefined,
-      ram_gb: form.ram_gb !== '' ? Number(form.ram_gb) || 0 : undefined,
-      almacenamiento_gb:
-        form.almacenamiento_gb !== '' ? Number(form.almacenamiento_gb) || 0 : undefined,
-      pantalla_pulgadas:
-        form.pantalla_pulgadas !== '' ? Number(form.pantalla_pulgadas) || 0 : undefined,
-      camara_mp: form.camara_mp !== '' ? Number(form.camara_mp) || 0 : undefined,
-      bateria_mah: form.bateria_mah !== '' ? Number(form.bateria_mah) || 0 : undefined,
     };
+    if (priceMode === 'manual') {
+      payload.price_local = form.precio_local !== '' ? Number(form.precio_local) || 0 : undefined;
+      payload.price_distribuidor =
+        form.precio_distribuidor !== '' ? Number(form.precio_distribuidor) || 0 : undefined;
+      if (payload.price_local != null) {
+        payload.price = payload.price_local;
+      }
+    } else {
+      payload.price = precioLocalCalc > 0 ? precioLocalCalc : undefined;
+    }
     try {
       if (editingProducto) {
         await Api.actualizarProducto(editingProducto.id, payload);
       } else {
         await Api.crearProducto(payload);
       }
-      setForm(emptyForm);
+      const keepTipoCambio = form.tipo_cambio || (dolarBlue ? String(dolarBlue) : '');
+      setForm(buildEmptyForm(keepTipoCambio));
       setEditingProducto(null);
       setCodigoLookupMsg(null);
       setCodigoLookupError(null);
@@ -322,6 +355,10 @@ export default function Productos() {
       image_url: p.image_url || '',
       category_id: p.category_id ? String(p.category_id) : '',
       stock_quantity: String(p.stock_quantity ?? ''),
+      comision_pct: p.comision_pct != null ? String(p.comision_pct) : '',
+      precio_modo: p.precio_modo === 'manual' ? 'manual' : 'auto',
+      precio_local: p.price_local != null ? String(p.price_local) : '',
+      precio_distribuidor: p.price_distribuidor != null ? String(p.price_distribuidor) : '',
       costo_pesos: p.costo_pesos != null ? String(p.costo_pesos) : '',
       costo_dolares: p.costo_dolares != null ? String(p.costo_dolares) : '',
       tipo_cambio: p.tipo_cambio != null ? String(p.tipo_cambio) : '',
@@ -334,14 +371,6 @@ export default function Productos() {
           ? String((p.margen_distribuidor * 100).toFixed(2))
           : emptyForm.margen_distribuidor,
       precio_final: p.precio_final != null ? String(p.precio_final) : '',
-      marca: p.marca || '',
-      modelo: p.modelo || '',
-      procesador: p.procesador || '',
-      ram_gb: p.ram_gb != null ? String(p.ram_gb) : '',
-      almacenamiento_gb: p.almacenamiento_gb != null ? String(p.almacenamiento_gb) : '',
-      pantalla_pulgadas: p.pantalla_pulgadas != null ? String(p.pantalla_pulgadas) : '',
-      camara_mp: p.camara_mp != null ? String(p.camara_mp) : '',
-      bateria_mah: p.bateria_mah != null ? String(p.bateria_mah) : '',
     });
     try {
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -401,6 +430,80 @@ export default function Productos() {
         Productos
       </h2>
       <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4 space-y-4">
+        <div className="space-y-2 border border-white/10 rounded-2xl p-3 bg-white/5">
+          <div className="text-sm font-semibold text-slate-200">Importar productos desde Excel</div>
+          <div className="text-xs text-slate-400">
+            Columnas sugeridas: nombre, categoria, precio o costo_pesos, stock, codigo (opcional), image_url (opcional).
+          </div>
+          {importError && <Alert kind="error" message={importError} />}
+          {importResult && (
+            <Alert
+              kind={importResult?.totals?.errors ? 'error' : 'info'}
+              message={`Filas: ${importResult?.totals?.rows || 0} | ${importResult?.dry_run ? 'A importar' : 'Creados'}: ${importResult?.dry_run ? (importResult?.totals?.would_create || 0) : (importResult?.totals?.created || 0)} | Omitidos: ${importResult?.totals?.skipped || 0} | Errores: ${importResult?.totals?.errors || 0}`}
+            />
+          )}
+          <div className="flex flex-col md:flex-row gap-2 items-start md:items-center">
+            <input
+              type="file"
+              accept=".xlsx,.csv"
+              className="input-modern text-sm"
+              onChange={(e) => {
+                setImportFile(e.target.files?.[0] || null);
+                setImportError(null);
+                setImportResult(null);
+              }}
+            />
+            <div className="flex gap-2">
+              <Button type="button" loading={previewing} onClick={() => runImport(true)}>
+                {previewing ? 'Analizando...' : 'Vista previa'}
+              </Button>
+              <Button type="button" loading={importing} onClick={() => runImport(false)}>
+                {importing ? 'Importando...' : 'Importar'}
+              </Button>
+            </div>
+          </div>
+          {importResult?.preview?.length ? (
+            <div className="text-xs text-slate-300">
+              Vista previa (primeras filas vÃ¡lidas):
+              <div className="overflow-x-auto mt-2">
+                <table className="min-w-full text-xs">
+                  <thead className="text-left text-slate-400">
+                    <tr>
+                      <th className="py-1 pr-2">Fila</th>
+                      <th className="py-1 pr-2">Nombre</th>
+                      <th className="py-1 pr-2">CategorÃ­a</th>
+                      <th className="py-1 pr-2">Precio</th>
+                      <th className="py-1 pr-2">Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-slate-200">
+                    {importResult.preview.map((p: any) => (
+                      <tr key={`${p.row}-${p.name}`} className="border-t border-white/10">
+                        <td className="py-1 pr-2">{p.row}</td>
+                        <td className="py-1 pr-2">{p.name}</td>
+                        <td className="py-1 pr-2">{p.categoria || '-'}</td>
+                        <td className="py-1 pr-2">{p.precio != null ? `$${Number(p.precio).toFixed(2)}` : '-'}</td>
+                        <td className="py-1 pr-2">{p.stock ?? 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+          {importResult?.errors?.length ? (
+            <div className="text-xs text-rose-200">
+              Errores (primeros 20):
+              <ul className="mt-1 space-y-1">
+                {importResult.errors.slice(0, 20).map((err: any, idx: number) => (
+                  <li key={`${err.row}-${err.field}-${idx}`}>
+                    Fila {err.row}: {err.field} - {err.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
         <form
           onSubmit={onSubmitForm}
           className="grid grid-cols-1 md:grid-cols-6 gap-2 mb-4"
@@ -425,7 +528,8 @@ export default function Productos() {
                 className="underline hover:text-amber-100"
                 onClick={() => {
                   setEditingProducto(null);
-                  setForm(emptyForm);
+                  const keepTipoCambio = form.tipo_cambio || (dolarBlue ? String(dolarBlue) : '');
+                  setForm(buildEmptyForm(keepTipoCambio));
                 }}
               >
                 Cancelar edición
@@ -472,24 +576,71 @@ export default function Productos() {
               setForm({ ...form, description: e.target.value })
             }
           />
-          <input
+          <select
             className="input-modern text-sm"
-            placeholder="Precio venta base (calculado)"
-            type="number"
-            step="0.01"
-            value={precioLocalCalc.toFixed(2)}
-            readOnly
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Precio final (manual)"
-            type="number"
-            step="0.01"
-            value={form.precio_final}
+            value={form.precio_modo}
             onChange={(e) =>
-              setForm({ ...form, precio_final: e.target.value })
+              setForm((prev) => ({ ...prev, precio_modo: e.target.value === 'manual' ? 'manual' : 'auto' }))
             }
-          />
+          >
+            <option value="auto">Precios automÃ¡ticos</option>
+            <option value="manual">Precios manuales</option>
+          </select>
+          {form.precio_modo === 'manual' ? (
+            <>
+              <input
+                className="input-modern text-sm"
+                placeholder={`${priceLabels.local} (manual)`}
+                type="number"
+                step="0.01"
+                value={form.precio_local}
+                onChange={(e) =>
+                  setForm({ ...form, precio_local: e.target.value })
+                }
+              />
+              <input
+                className="input-modern text-sm"
+                placeholder={`${priceLabels.distribuidor} (manual)`}
+                type="number"
+                step="0.01"
+                value={form.precio_distribuidor}
+                onChange={(e) =>
+                  setForm({ ...form, precio_distribuidor: e.target.value })
+                }
+              />
+              <input
+                className="input-modern text-sm"
+                placeholder={`${priceLabels.final} (manual)`}
+                type="number"
+                step="0.01"
+                value={form.precio_final}
+                onChange={(e) =>
+                  setForm({ ...form, precio_final: e.target.value })
+                }
+              />
+            </>
+          ) : (
+            <>
+              <input
+                className="input-modern text-sm"
+                placeholder={`${priceLabels.local} (calculado)`}
+                type="number"
+                step="0.01"
+                value={precioLocalCalc.toFixed(2)}
+                readOnly
+              />
+              <input
+                className="input-modern text-sm"
+                placeholder={`${priceLabels.final} (manual)`}
+                type="number"
+                step="0.01"
+                value={form.precio_final}
+                onChange={(e) =>
+                  setForm({ ...form, precio_final: e.target.value })
+                }
+              />
+            </>
+          )}
           <select
             className="input-modern text-sm"
             value={form.category_id}
@@ -511,7 +662,7 @@ export default function Productos() {
             />
             <input
               className="input-modern text-xs"
-              placeholder="URL imagen (se completa al subir)"
+              placeholder="URL imagen (opcional)"
               value={form.image_url}
               onChange={(e) =>
                 setForm({ ...form, image_url: e.target.value })
@@ -559,109 +710,71 @@ export default function Productos() {
               setForm((prev) => ({ ...prev, tipo_cambio: e.target.value }))
             }
           />
-          <input
-            className="input-modern text-sm"
-            placeholder="% margen local"
-            type="number"
-            step="0.01"
-            value={form.margen_local}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, margen_local: e.target.value }))
-            }
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="% margen distribuidor"
-            type="number"
-            step="0.01"
-            value={form.margen_distribuidor}
-            onChange={(e) =>
-              setForm((prev) => ({
-                ...prev,
-                margen_distribuidor: e.target.value,
-              }))
-            }
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Stock inicial"
-            type="number"
-            value={form.stock_quantity}
+          {form.precio_modo === 'auto' && (
+            <>
+              <input
+                className="input-modern text-sm"
+                placeholder="% margen local"
+                type="number"
+                step="0.01"
+                value={form.margen_local}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, margen_local: e.target.value }))
+                }
+              />
+              <input
+                className="input-modern text-sm"
+                placeholder="% margen distribuidor"
+                type="number"
+                step="0.01"
+                value={form.margen_distribuidor}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    margen_distribuidor: e.target.value,
+                  }))
+                }
+              />
+            </>
+          )}
+            <input
+              className="input-modern text-sm"
+              placeholder="% comision"
+              type="number"
+              step="0.01"
+              value={form.comision_pct}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  comision_pct: e.target.value,
+                }))
+              }
+            />
+            <input
+              className="input-modern text-sm"
+              placeholder="Stock inicial"
+              type="number"
+              value={form.stock_quantity}
             onChange={(e) =>
               setForm({ ...form, stock_quantity: e.target.value })
             }
           />
-          <div className="md:col-span-6 text-xs text-slate-400 uppercase">
-            Especificaciones fijas
-          </div>
-          <input
-            className="input-modern text-sm"
-            placeholder="Marca"
-            value={form.marca}
-            onChange={(e) => setForm({ ...form, marca: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Modelo"
-            value={form.modelo}
-            onChange={(e) => setForm({ ...form, modelo: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm md:col-span-2"
-            placeholder="Procesador"
-            value={form.procesador}
-            onChange={(e) => setForm({ ...form, procesador: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="RAM (GB)"
-            type="number"
-            value={form.ram_gb}
-            onChange={(e) => setForm({ ...form, ram_gb: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Almacenamiento (GB)"
-            type="number"
-            value={form.almacenamiento_gb}
-            onChange={(e) => setForm({ ...form, almacenamiento_gb: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Pantalla (pulgadas)"
-            type="number"
-            step="0.1"
-            value={form.pantalla_pulgadas}
-            onChange={(e) => setForm({ ...form, pantalla_pulgadas: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Camara (MP)"
-            type="number"
-            value={form.camara_mp}
-            onChange={(e) => setForm({ ...form, camara_mp: e.target.value })}
-          />
-          <input
-            className="input-modern text-sm"
-            placeholder="Bateria (mAh)"
-            type="number"
-            value={form.bateria_mah}
-            onChange={(e) => setForm({ ...form, bateria_mah: e.target.value })}
-          />
-          <div className="md:col-span-2 flex flex-col gap-1 text-xs text-slate-300">
-            <div>
-              Precio distribuidor estimado:{' '}
-              <span className="font-semibold">
-                ${precioLocalCalc.toFixed(2)}
-              </span>
+          {form.precio_modo === 'auto' && (
+            <div className="md:col-span-2 flex flex-col gap-1 text-xs text-slate-300">
+              <div>
+                {priceLabels.local} estimado:{' '}
+                <span className="font-semibold">
+                  ${precioLocalCalc.toFixed(2)}
+                </span>
+              </div>
+              <div>
+                {priceLabels.distribuidor} estimado:{' '}
+                <span className="font-semibold">
+                  ${precioDistribuidorCalc.toFixed(2)}
+                </span>
+              </div>
             </div>
-            <div>
-              Precio mayorista estimado:{' '}
-              <span className="font-semibold">
-                ${precioDistribuidorCalc.toFixed(2)}
-              </span>
-            </div>
-          </div>
+          )}
           <Button disabled={!canSubmit} className="md:col-span-6">
             {editingProducto ? 'Guardar cambios' : 'Crear'}
           </Button>
@@ -692,9 +805,9 @@ export default function Productos() {
                   <th className="py-2">Código</th>
                   <th className="py-2">Categoría</th>
                   <th className="py-2">Costo ARS</th>
-                  <th className="py-2">Precio distribuidor</th>
-                  <th className="py-2">Precio mayorista</th>
-                  <th className="py-2">Precio final</th>
+                  <th className="py-2">{priceLabels.local}</th>
+                  <th className="py-2">{priceLabels.distribuidor}</th>
+                  <th className="py-2">{priceLabels.final}</th>
                   <th className="py-2">Stock</th>
                   <th className="py-2">Acciones</th>
                 </tr>

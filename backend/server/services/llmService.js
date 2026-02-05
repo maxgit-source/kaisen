@@ -9,6 +9,9 @@ const PROVIDER_ORDER = (process.env.AI_PROVIDER_ORDER || 'openai,gemini,deepseek
   .filter(Boolean);
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-pro';
+const LOCAL_AI_MODE = (process.env.LOCAL_AI_MODE || '').trim().toLowerCase();
+const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || process.env.LOCAL_AI_URL;
+const LOCAL_AI_MODEL = process.env.LOCAL_AI_MODEL;
 
 const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 15000);
 
@@ -188,9 +191,60 @@ async function callDeepSeek({ messages, maxTokens = 512 }) {
   return content;
 }
 
+async function callOpenAICompatible({
+  baseUrl,
+  apiKey,
+  messages,
+  model,
+  maxTokens = 512,
+}) {
+  if (!baseUrl) throw new Error('LOCAL_AI_BASE_URL not configured');
+  if (!apiKey) throw new Error('LOCAL_AI_API_KEY not configured');
+  if (!model) throw new Error('LOCAL_AI_MODEL not configured');
+
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const body = JSON.stringify({
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.2,
+  });
+
+  const res = await withTimeout(
+    httpRequest(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      body,
+    })
+  );
+
+  if (!res.ok) {
+    throw new Error(`Local OpenAI-compatible error: ${res.status} ${res.text || ''}`.trim());
+  }
+
+  const data = JSON.parse(res.text || '{}');
+  const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  if (!content) throw new Error('Local OpenAI-compatible: empty response');
+  return content;
+}
+
 async function callLocal({ messages, maxTokens = 512 }) {
-  const baseUrl = process.env.LOCAL_AI_URL;
-  if (!baseUrl) throw new Error('LOCAL_AI_URL not configured');
+  if (LOCAL_AI_MODE === 'openai' || LOCAL_AI_MODE === 'openai-compatible' || LOCAL_AI_MODE === 'jan') {
+    return callOpenAICompatible({
+      baseUrl: LOCAL_AI_BASE_URL,
+      apiKey: process.env.LOCAL_AI_API_KEY,
+      messages,
+      model: LOCAL_AI_MODEL,
+      maxTokens,
+    });
+  }
+
+  const baseUrl = LOCAL_AI_BASE_URL;
+  if (!baseUrl) throw new Error('LOCAL_AI_BASE_URL not configured');
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat`;
   const body = JSON.stringify({ messages, max_tokens: maxTokens });
@@ -332,8 +386,60 @@ async function generateTicketReply({ ticket, eventos }) {
   return content;
 }
 
+async function generateExecutiveReportNarrative({ data }) {
+  const payload = JSON.stringify(data || {}, null, 2);
+
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'Eres un director financiero para PYMEs. Escribes en espanol claro, directo y accionable. ' +
+        'Usa solo los datos del JSON provisto. No inventes numeros ni porcentajes. ' +
+        'Si falta un dato, indicalo explicitamente. ' +
+        'Devuelve una respuesta en markdown con estas secciones: ' +
+        '"Resumen ejecutivo", "Riesgos criticos", "Oportunidades", "Acciones proximos 7 dias", "Datos clave".',
+    },
+    {
+      role: 'user',
+      content:
+        'Usa el siguiente JSON como unica fuente de verdad. ' +
+        'No agregues datos externos ni supuestos. Responde en español:\n\n' +
+        payload,
+    },
+  ];
+
+  const content = await callLLM({ messages, maxTokens: 900 });
+  return content;
+}
+
+async function generatePredictionsNarrative({ data }) {
+  const payload = JSON.stringify(data || {}, null, 2);
+
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'Eres un analista de operaciones y stock para PYMEs. Respondes en espanol claro y accionable. ' +
+        'Usa solo los datos del JSON provisto. No inventes numeros. ' +
+        'Si falta un dato, indicalo. ' +
+        'Devuelve markdown con secciones: "Resumen", "Riesgos de stock", "Precios a revisar", "Anomalias", "Acciones sugeridas".',
+    },
+    {
+      role: 'user',
+      content:
+        'Usa el siguiente JSON como unica fuente de verdad para resumir predicciones y alertas:\n\n' +
+        payload,
+    },
+  ];
+
+  const content = await callLLM({ messages, maxTokens: 800 });
+  return content;
+}
+
 module.exports = {
   callLLM,
   generateCrmSuggestion,
   generateTicketReply,
+  generateExecutiveReportNarrative,
+  generatePredictionsNarrative,
 };

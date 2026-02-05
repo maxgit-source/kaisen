@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Api } from '../lib/api';
+import { usePriceLabels } from '../lib/priceLabels';
 import Skeleton from '../ui/Skeleton';
 
 type CatalogoConfig = {
@@ -38,6 +39,7 @@ type CatalogoData = {
 };
 
 export default function CatalogoPublico() {
+  const { labels: priceLabels } = usePriceLabels();
   const [data, setData] = useState<CatalogoData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -287,21 +289,21 @@ export default function CatalogoPublico() {
               className={`catalogo-chip ${priceType === 'final' ? 'active' : ''}`}
               onClick={() => setPriceType('final')}
             >
-              Precio final
+              {priceLabels.final}
             </button>
             <button
               type="button"
               className={`catalogo-chip ${priceType === 'distribuidor' ? 'active' : ''}`}
               onClick={() => setPriceType('distribuidor')}
             >
-              Distribuidor
+              {priceLabels.local}
             </button>
             <button
               type="button"
               className={`catalogo-chip ${priceType === 'mayorista' ? 'active' : ''}`}
               onClick={() => setPriceType('mayorista')}
             >
-              Mayorista
+              {priceLabels.distribuidor}
             </button>
           </div>
 

@@ -19,10 +19,18 @@ type Cliente = {
   provincia?: string | null;
   localidad?: string | null;
   codigo_postal?: string | null;
+  zona_id?: number | null;
    tipo_cliente?: 'minorista' | 'mayorista' | 'distribuidor' | null;
    segmento?: string | null;
    tags?: string | null;
   estado: 'activo' | 'inactivo';
+};
+
+type Zona = {
+  id: number;
+  nombre: string;
+  color_hex?: string | null;
+  activo?: boolean;
 };
 
 type VentaCliente = {
@@ -67,6 +75,20 @@ type DeudaInicialPago = {
   descripcion?: string | null;
 };
 
+type MetodoPago = {
+  id: number;
+  nombre: string;
+  moneda?: string | null;
+  activo?: boolean;
+  orden?: number;
+};
+
+type PagoMetodoForm = {
+  metodo_id: string;
+  monto: string;
+  moneda?: string | null;
+};
+
 type HistorialPago = {
   id: number;
   tipo: 'pago_venta' | 'pago_cuenta' | 'pago_deuda_inicial' | 'entrega_venta';
@@ -102,6 +124,7 @@ export default function Clientes() {
   const [selectedCliente, setSelectedCliente] = useState<Cliente | null>(null);
   const [detalleVentas, setDetalleVentas] = useState<VentaCliente[]>([]);
   const [ranking, setRanking] = useState<{ cliente_id: number; total: number }[]>([]);
+  const [zonas, setZonas] = useState<Zona[]>([]);
   const [crmOpps, setCrmOpps] = useState<CrmOportunidad[]>([]);
   const [crmActs, setCrmActs] = useState<CrmActividad[]>([]);
   const [detalleLoading, setDetalleLoading] = useState(false);
@@ -111,6 +134,12 @@ export default function Clientes() {
   const [accessSaving, setAccessSaving] = useState(false);
   const [deudasIniciales, setDeudasIniciales] = useState<DeudaInicial[]>([]);
   const [pagosDeudaInicial, setPagosDeudaInicial] = useState<DeudaInicialPago[]>([]);
+  const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([]);
+  const [metodosPagoLoading, setMetodosPagoLoading] = useState(false);
+  const [metodosPagoError, setMetodosPagoError] = useState<string | null>(null);
+  const [pagoMetodos, setPagoMetodos] = useState<PagoMetodoForm[]>([
+    { metodo_id: '', monto: '', moneda: '' },
+  ]);
   const [historialPagos, setHistorialPagos] = useState<HistorialPago[]>([]);
   const [historialLoading, setHistorialLoading] = useState(false);
   const [historialError, setHistorialError] = useState<string | null>(null);
@@ -121,7 +150,6 @@ export default function Clientes() {
     monto: '',
   });
   const [pagoDeudaForm, setPagoDeudaForm] = useState({
-    monto: '',
     fecha: new Date().toISOString().slice(0, 10),
     venta_id: '',
   });
@@ -144,6 +172,7 @@ export default function Clientes() {
     provincia: '',
     localidad: '',
     codigo_postal: '',
+    zona_id: '',
     tipo_cliente: 'minorista',
     segmento: '',
     tags: '',
@@ -157,10 +186,11 @@ export default function Clientes() {
   async function loadBase() {
     setError(null);
     try {
-      const [deudaRows, topRows, umbralRes] = await Promise.all([
+      const [deudaRows, topRows, umbralRes, zonasRes] = await Promise.all([
         Api.deudas(),
         Api.topClientes(200).catch(() => []),
         Api.getDebtThreshold().catch(() => null),
+        Api.zonas().catch(() => []),
       ]);
       const map: Record<number, number> = {};
       for (const d of deudaRows as any[]) {
@@ -174,6 +204,7 @@ export default function Clientes() {
       if (umbralVal != null && umbralVal > 0) {
         setDeudaUmbralRojo(umbralVal);
       }
+      setZonas(Array.isArray(zonasRes) ? (zonasRes as Zona[]) : []);
       setRanking(
         (topRows || []).map((r: any) => ({
           cliente_id: Number(r.cliente_id),
@@ -209,6 +240,28 @@ export default function Clientes() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setMetodosPagoLoading(true);
+      setMetodosPagoError(null);
+      try {
+        const rows = await Api.metodosPago();
+        if (!active) return;
+        setMetodosPago((rows || []) as MetodoPago[]);
+      } catch (e: any) {
+        if (!active) return;
+        setMetodosPagoError(e?.message || 'No se pudieron cargar los metodos de pago');
+        setMetodosPago([]);
+      } finally {
+        if (active) setMetodosPagoLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
 
@@ -322,6 +375,25 @@ export default function Clientes() {
       ),
     [detalleVentas]
   );
+
+  function parseMonto(value: string) {
+    const num = Number(String(value || '').replace(',', '.'));
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  const totalPagoMetodos = useMemo(
+    () => pagoMetodos.reduce((acc, row) => acc + parseMonto(row.monto), 0),
+    [pagoMetodos]
+  );
+
+  const canSubmitPago = useMemo(() => {
+    return (
+      metodosPago.length > 0 &&
+      pagoMetodos.some(
+        (row) => Number(row.metodo_id) > 0 && parseMonto(row.monto) > 0
+      ) && !pagoDeudaSaving
+    );
+  }, [metodosPago.length, pagoMetodos, pagoDeudaSaving]);
 
   const historialCuenta = useMemo(() => {
     const items: HistorialCuentaItem[] = [];
@@ -483,12 +555,57 @@ export default function Clientes() {
     await loadHistorialPagos();
   }
 
+  function updatePagoMetodo(index: number, changes: Partial<PagoMetodoForm>) {
+    setPagoMetodos((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, ...changes } : row))
+    );
+  }
+
+  function addPagoMetodoRow() {
+    setPagoMetodos((prev) => [...prev, { metodo_id: '', monto: '', moneda: '' }]);
+  }
+
+  function removePagoMetodoRow(index: number) {
+    setPagoMetodos((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function registrarPagoDeuda() {
     if (!selectedCliente || pagoDeudaSaving) return;
     setPagoDeudaError(null);
-    const montoNum = Number(pagoDeudaForm.monto.replace(',', '.'));
-    if (!Number.isFinite(montoNum) || montoNum <= 0) {
-      setPagoDeudaError('Ingresa un monto valido');
+    if (!metodosPago.length) {
+      setPagoDeudaError('Configura al menos un metodo de pago en Configuracion');
+      return;
+    }
+    const parsedRows = pagoMetodos.map((row) => {
+      const metodoId = Number(row.metodo_id);
+      const monto = parseMonto(row.monto);
+      const metodo = metodosPago.find((m) => Number(m.id) === metodoId);
+      return {
+        metodo_id: metodoId,
+        monto,
+        moneda: (row.moneda || metodo?.moneda || '').toString().trim().toUpperCase(),
+        rawMetodo: row.metodo_id,
+        rawMonto: row.monto,
+      };
+    });
+    const invalidRow = parsedRows.find(
+      (row) =>
+        (row.rawMetodo && (!row.metodo_id || row.metodo_id <= 0)) ||
+        (row.rawMonto && row.monto <= 0) ||
+        (row.metodo_id > 0 && row.monto <= 0)
+    );
+    if (invalidRow) {
+      setPagoDeudaError('Completa los metodos y montos validos');
+      return;
+    }
+    const metodosValidos = parsedRows.filter((row) => row.metodo_id > 0 && row.monto > 0);
+    if (!metodosValidos.length) {
+      setPagoDeudaError('Agrega al menos un metodo con monto');
+      return;
+    }
+    const totalMonto = metodosValidos.reduce((acc, row) => acc + row.monto, 0);
+    if (!Number.isFinite(totalMonto) || totalMonto <= 0) {
+      setPagoDeudaError('El total del pago es invalido');
       return;
     }
     const ventaId = pagoDeudaForm.venta_id ? Number(pagoDeudaForm.venta_id) : null;
@@ -501,16 +618,22 @@ export default function Clientes() {
       const fecha = pagoDeudaForm.fecha || undefined;
       await Api.crearPago({
         cliente_id: selectedCliente.id,
-        monto: montoNum,
+        monto: totalMonto,
         fecha,
         venta_id: ventaId || undefined,
+        metodos: metodosValidos.map((row) => ({
+          metodo_id: row.metodo_id,
+          monto: row.monto,
+          moneda: row.moneda || undefined,
+        })),
       });
       await verDetalleCliente(selectedCliente);
       await loadBase();
       if (showHistorialModal) {
         await loadHistorialPagos();
       }
-      setPagoDeudaForm((prev) => ({ ...prev, monto: '', venta_id: '' }));
+      setPagoDeudaForm((prev) => ({ ...prev, venta_id: '' }));
+      setPagoMetodos([{ metodo_id: '', monto: '', moneda: '' }]);
     } catch (e: any) {
       setPagoDeudaError(e?.message || 'No se pudo registrar el pago');
     } finally {
@@ -544,24 +667,25 @@ export default function Clientes() {
     setEditingCliente(cliente);
     setDeudaAnteriorForm({ tiene: false, monto: '' });
     setPadronError(null);
-    setForm({
-      nombre: cliente.nombre || '',
-      apellido: cliente.apellido || '',
-      email: cliente.email || '',
-      telefono: cliente.telefono || '',
-      direccion: cliente.direccion || '',
-      cuit_cuil: cliente.cuit_cuil || '',
-      tipo_doc: cliente.tipo_doc || '',
-      nro_doc: cliente.nro_doc || '',
-      condicion_iva: cliente.condicion_iva || '',
-      domicilio_fiscal: cliente.domicilio_fiscal || '',
-      provincia: cliente.provincia || '',
-      localidad: cliente.localidad || '',
-      codigo_postal: cliente.codigo_postal || '',
-      tipo_cliente: cliente.tipo_cliente || 'minorista',
-      segmento: cliente.segmento || '',
-      tags: cliente.tags || '',
-    });
+      setForm({
+        nombre: cliente.nombre || '',
+        apellido: cliente.apellido || '',
+        email: cliente.email || '',
+        telefono: cliente.telefono || '',
+        direccion: cliente.direccion || '',
+        cuit_cuil: cliente.cuit_cuil || '',
+        tipo_doc: cliente.tipo_doc || '',
+        nro_doc: cliente.nro_doc || '',
+        condicion_iva: cliente.condicion_iva || '',
+        domicilio_fiscal: cliente.domicilio_fiscal || '',
+        provincia: cliente.provincia || '',
+        localidad: cliente.localidad || '',
+        codigo_postal: cliente.codigo_postal || '',
+        zona_id: cliente.zona_id != null ? String(cliente.zona_id) : '',
+        tipo_cliente: cliente.tipo_cliente || 'minorista',
+        segmento: cliente.segmento || '',
+        tags: cliente.tags || '',
+      });
     try {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch {}
@@ -693,13 +817,14 @@ export default function Clientes() {
               tipo_doc: form.tipo_doc || undefined,
               nro_doc: form.nro_doc || undefined,
               condicion_iva: form.condicion_iva || undefined,
-              domicilio_fiscal: form.domicilio_fiscal || undefined,
-              provincia: form.provincia || undefined,
-              localidad: form.localidad || undefined,
-              codigo_postal: form.codigo_postal || undefined,
-              tipo_cliente: form.tipo_cliente || undefined,
-              segmento: form.segmento || undefined,
-              tags: form.tags || undefined,
+                domicilio_fiscal: form.domicilio_fiscal || undefined,
+                provincia: form.provincia || undefined,
+                localidad: form.localidad || undefined,
+                codigo_postal: form.codigo_postal || undefined,
+                zona_id: form.zona_id ? Number(form.zona_id) : undefined,
+                tipo_cliente: form.tipo_cliente || undefined,
+                segmento: form.segmento || undefined,
+                tags: form.tags || undefined,
               estado: editingCliente?.estado || undefined,
             };
             try {
@@ -736,6 +861,7 @@ export default function Clientes() {
                 provincia: '',
                 localidad: '',
                 codigo_postal: '',
+                zona_id: '',
                 tipo_cliente: 'minorista',
                 segmento: '',
                 tags: '',
@@ -900,6 +1026,18 @@ export default function Clientes() {
           </div>
           <select
             className="input-modern text-sm"
+            value={form.zona_id}
+            onChange={(e) => setForm((prev) => ({ ...prev, zona_id: e.target.value }))}
+          >
+            <option value="">Zona</option>
+            {zonas.map((z) => (
+              <option key={z.id} value={z.id}>
+                {z.nombre}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input-modern text-sm"
             value={form.tipo_cliente}
             onChange={(e) =>
               setForm((prev) => ({ ...prev, tipo_cliente: e.target.value as any }))
@@ -983,6 +1121,7 @@ export default function Clientes() {
                     provincia: '',
                     localidad: '',
                     codigo_postal: '',
+                    zona_id: '',
                     tipo_cliente: 'minorista',
                     segmento: '',
                     tags: '',
@@ -1157,10 +1296,10 @@ export default function Clientes() {
                   setHistorialPagos([]);
                   setHistorialError(null);
                   setPagoDeudaForm({
-                    monto: '',
                     fecha: new Date().toISOString().slice(0, 10),
                     venta_id: '',
                   });
+                  setPagoMetodos([{ metodo_id: '', monto: '', moneda: '' }]);
                   setPagoDeudaError(null);
                 }}
               >
@@ -1373,23 +1512,98 @@ export default function Clientes() {
                           ))}
                         </select>
                       </label>
-                      <label className="block">
-                        <div className="text-slate-300 mb-1">Monto</div>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                          value={pagoDeudaForm.monto}
-                          onChange={(e) =>
-                            setPagoDeudaForm((prev) => ({
-                              ...prev,
-                              monto: e.target.value,
-                            }))
-                          }
-                          disabled={pagoDeudaSaving}
-                        />
-                      </label>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Formas de pago</span>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-white/10 border border-white/10 text-xs"
+                            onClick={addPagoMetodoRow}
+                            disabled={pagoDeudaSaving}
+                          >
+                            Agregar metodo
+                          </button>
+                        </div>
+                        {metodosPagoLoading && (
+                          <div className="text-xs text-slate-400">Cargando metodos...</div>
+                        )}
+                        {metodosPagoError && (
+                          <div className="text-xs text-rose-300">{metodosPagoError}</div>
+                        )}
+                        {!metodosPagoLoading && !metodosPago.length && (
+                          <div className="text-xs text-amber-200">
+                            No hay metodos de pago configurados. Crea uno en Configuracion.
+                          </div>
+                        )}
+                        <div className="space-y-2">
+                          {pagoMetodos.map((row, index) => {
+                            const metodo = metodosPago.find(
+                              (m) => String(m.id) === String(row.metodo_id)
+                            );
+                            const moneda =
+                              row.moneda || metodo?.moneda || 'ARS';
+                            return (
+                              <div
+                                key={`metodo-${index}`}
+                                className="grid grid-cols-1 md:grid-cols-[1.4fr_0.8fr_auto] gap-2 items-center"
+                              >
+                                <select
+                                  className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                                  value={row.metodo_id}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    const metodoSel = metodosPago.find(
+                                      (m) => String(m.id) === String(value)
+                                    );
+                                    updatePagoMetodo(index, {
+                                      metodo_id: value,
+                                      moneda: metodoSel?.moneda || '',
+                                    });
+                                  }}
+                                  disabled={pagoDeudaSaving || metodosPagoLoading}
+                                >
+                                  <option value="">Selecciona metodo</option>
+                                  {metodosPago.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                      {m.nombre}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                                    value={row.monto}
+                                    onChange={(e) =>
+                                      updatePagoMetodo(index, { monto: e.target.value })
+                                    }
+                                    disabled={pagoDeudaSaving}
+                                  />
+                                  <span className="text-[11px] text-slate-400 w-10 text-right">
+                                    {moneda || 'ARS'}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 rounded bg-rose-500/20 border border-rose-500/30 text-rose-200 text-xs disabled:opacity-50"
+                                  onClick={() => removePagoMetodoRow(index)}
+                                  disabled={pagoMetodos.length <= 1 || pagoDeudaSaving}
+                                >
+                                  Quitar
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Total</span>
+                          <span className="text-slate-100">
+                            ${totalPagoMetodos.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
                       <label className="block">
                         <div className="text-slate-300 mb-1">Fecha</div>
                         <input
@@ -1409,7 +1623,7 @@ export default function Clientes() {
                         <button
                           type="submit"
                           className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/30 hover:bg-emerald-500/30 text-emerald-100 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={pagoDeudaSaving || !pagoDeudaForm.monto}
+                          disabled={!canSubmitPago}
                         >
                           {pagoDeudaSaving ? 'Registrando...' : 'Registrar pago'}
                         </button>

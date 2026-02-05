@@ -4,6 +4,7 @@ const productController = require('../controllers/productcontroller.js');
 const authMiddleware = require('../middlewares/authmiddleware.js');
 const { requireRole } = require('../middlewares/roleMiddleware');
 const { requireApproval, productPriceChangeEvaluator } = require('../middlewares/approvalMiddleware');
+const { uploadSingle } = require('../middlewares/uploadMiddleware');
 
 // Obtener productos (no requiere autenticación para GET)
 router.get('/productos', productController.getProducts);
@@ -22,6 +23,15 @@ router.get(
 
 // Agregar producto (requiere autenticación + rol)
 router.post('/productos', authMiddleware, requireRole(['admin', 'gerente']), productController.createProduct);
+
+// Importar productos desde Excel/CSV
+router.post(
+  '/productos/import',
+  authMiddleware,
+  requireRole(['admin', 'gerente']),
+  uploadSingle('file'),
+  productController.importProducts
+);
 
 // Editar producto (requiere autenticación + rol)
 router.put(

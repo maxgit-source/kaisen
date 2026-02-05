@@ -27,6 +27,8 @@ const DEFAULT_STOCK_TARGET_DAYS = Math.max(7, Number(process.env.AI_STOCK_TARGET
 const DEFAULT_LEAD_TIME_DAYS = Math.max(1, Number(process.env.AI_LEAD_TIME_DAYS || 7));
 const DEFAULT_SERVICE_Z = clamp(toNumber(process.env.AI_SERVICE_LEVEL_Z, 1.28), 0.5, 3);
 const DEFAULT_OVERSTOCK_DAYS = Math.max(30, Number(process.env.AI_OVERSTOCK_DAYS || 90));
+const DEFAULT_OVERSTOCK_MIN_DAILY_AVG = Math.max(0, Number(process.env.AI_OVERSTOCK_MIN_DAILY_AVG || 0.05));
+const DEFAULT_OVERSTOCK_MIN_UNITS = Math.max(0, Number(process.env.AI_OVERSTOCK_MIN_UNITS || 2));
 const DEFAULT_PRICE_ALERT_PCT = clamp(toNumber(process.env.AI_PRICE_ALERT_PCT, 0.08), 0.01, 0.5);
 const DEFAULT_PRICE_ALERT_ABS = Math.max(0, Number(process.env.AI_PRICE_ALERT_ABS || 0));
 const DEFAULT_STOCKOUT_DAYS_HIGH = Math.max(1, Number(process.env.AI_STOCKOUT_DAYS_HIGH || 3));
@@ -54,23 +56,26 @@ function setCache(cache, key, data) {
   return data;
 }
 
-function toIsoDateUtc(value) {
+function toIsoDateLocal(value) {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function buildDateRange(historyDays) {
   const days = Math.max(1, Number(historyDays) || 1);
   const now = new Date();
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - (days - 1));
+  start.setDate(start.getDate() - (days - 1));
   const out = [];
   for (let i = 0; i < days; i += 1) {
     const d = new Date(start);
-    d.setUTCDate(start.getUTCDate() + i);
-    out.push(toIsoDateUtc(d));
+    d.setDate(start.getDate() + i);
+    out.push(toIsoDateLocal(d));
   }
   return out;
 }
@@ -211,13 +216,14 @@ async function getSalesSeriesBundle({ historyDays = 90, categoryId } = {}) {
     params
   );
   const seriesMap = new Map();
-  for (const r of rows) {
-    const id = Number(r.id);
-    const day = String(r.dia);
-    const perProduct = seriesMap.get(id) || new Map();
-    perProduct.set(day, toNumber(r.unidades, 0));
-    seriesMap.set(id, perProduct);
-  }
+    for (const r of rows) {
+      const id = Number(r.id);
+      const day = toIsoDateLocal(r.dia);
+      if (!day) continue;
+      const perProduct = seriesMap.get(id) || new Map();
+      perProduct.set(day, toNumber(r.unidades, 0));
+      seriesMap.set(id, perProduct);
+    }
   return { dateKeys, seriesMap };
 }
 
@@ -283,6 +289,8 @@ async function getInsightsConfig() {
         'ai_price_alert_pct',
         'ai_price_alert_abs',
         'ai_overstock_days',
+        'ai_overstock_min_daily_avg',
+        'ai_overstock_min_units',
         'ai_stockout_days_high',
         'ai_stockout_days_med'
       )`
@@ -313,6 +321,14 @@ async function getInsightsConfig() {
     priceAlertPct: clamp(toNumber(map.get('ai_price_alert_pct'), DEFAULT_PRICE_ALERT_PCT), 0.01, 0.5),
     priceAlertAbs: Math.max(0, toNumber(map.get('ai_price_alert_abs'), DEFAULT_PRICE_ALERT_ABS)),
     overstockDays: Math.max(30, toNumber(map.get('ai_overstock_days'), DEFAULT_OVERSTOCK_DAYS)),
+    overstockMinDailyAvg: Math.max(
+      0,
+      toNumber(map.get('ai_overstock_min_daily_avg'), DEFAULT_OVERSTOCK_MIN_DAILY_AVG)
+    ),
+    overstockMinUnits: Math.max(
+      0,
+      toNumber(map.get('ai_overstock_min_units'), DEFAULT_OVERSTOCK_MIN_UNITS)
+    ),
     stockoutDaysHigh,
     stockoutDaysMed,
   };
@@ -404,6 +420,7 @@ async function buildForecastList({ forecastDays = 14, historyDays = 90, stockTar
     .filter((p) => p.activo !== false)
     .map((p) => {
       const series = buildSeriesFromMap(seriesMap, dateKeys, p.id);
+      const historyUnits = series.reduce((acc, v) => acc + toNumber(v, 0), 0);
       const { forecast } = computeForecastSeries(series, forecastDays);
       const fallbackAvg = computeDailyAverage({ series, forecast });
       const dailyAvgRaw =
@@ -425,6 +442,7 @@ async function buildForecastList({ forecastDays = 14, historyDays = 90, stockTar
         producto_id: p.id,
         producto_nombre: p.nombre,
         daily_avg: Number(dailyAvg.toFixed(4)),
+        history_units: Number(historyUnits.toFixed(2)),
         forecast_units: Number(forecastUnits.toFixed(2)),
         disponible: available,
         cobertura_dias: Number((coberturaDias === Infinity ? 9999 : coberturaDias).toFixed(2)),
@@ -540,9 +558,11 @@ async function forecastDetail({ productoId, historyDays = 90, forecastDays = 14 
   );
 
   const salesByDay = new Map();
-  for (const r of rows) {
-    salesByDay.set(String(r.dia), toNumber(r.unidades, 0));
-  }
+    for (const r of rows) {
+      const day = toIsoDateLocal(r.dia);
+      if (!day) continue;
+      salesByDay.set(day, toNumber(r.unidades, 0));
+    }
 
   const series = dateKeys.map((day) => toNumber(salesByDay.get(day), 0));
   const history = dateKeys.map((day, idx) => ({
@@ -553,17 +573,17 @@ async function forecastDetail({ productoId, historyDays = 90, forecastDays = 14 
   const { forecast } = computeForecastSeries(series, forecastDays);
   const dailyAvg = computeDailyAverage({ series, forecast });
 
-  const lastDate = dateKeys.length
-    ? new Date(`${dateKeys[dateKeys.length - 1]}T00:00:00Z`)
-    : new Date();
-  const forecastRows = forecast.map((units, idx) => {
-    const d = new Date(lastDate);
-    d.setUTCDate(d.getUTCDate() + idx + 1);
-    return {
-      dia: toIsoDateUtc(d),
-      unidades: Number(units.toFixed(4)),
-    };
-  });
+    const lastDate = dateKeys.length
+      ? new Date(`${dateKeys[dateKeys.length - 1]}T00:00:00`)
+      : new Date();
+    const forecastRows = forecast.map((units, idx) => {
+      const d = new Date(lastDate);
+      d.setDate(d.getDate() + idx + 1);
+      return {
+        dia: toIsoDateLocal(d),
+        unidades: Number(units.toFixed(4)),
+      };
+    });
 
   return {
     producto_id: producto.id,
@@ -595,6 +615,17 @@ async function pricingRecommendations({ margin, historyDays = 90, limit = 200 })
         const dailyAvg = toNumber(salesMap.get(p.id), 0) / daysBase;
         const costo = Math.max(0, toNumber(p.precio_costo, 0));
         const precioActual = Math.max(0, toNumber(p.precio_venta, 0));
+        if (costo <= 0) {
+          return {
+            producto_id: p.id,
+            producto_nombre: p.nombre,
+            precio_actual: precioActual,
+            precio_sugerido: precioActual,
+            diferencia: 0,
+            margen_estimado: null,
+            rotacion_diaria: Number(dailyAvg.toFixed(4)),
+          };
+        }
         let base = Math.max(costo * (1 + targetMargin), costo);
         if (dailyAvg >= rotHigh) base *= 1 + adjUp;
         else if (dailyAvg > 0 && dailyAvg <= rotLow) base *= Math.max(0.01, 1 - adjDown);
@@ -664,20 +695,40 @@ async function pricingRecommendations({ margin, historyDays = 90, limit = 200 })
     }
 
     const recs = data.recomendaciones
-      .map((r) => ({
-        producto_id: r.producto_id,
-        producto_nombre: r.producto_nombre,
-        precio_actual:
-          productosPayload.find((p) => p.producto_id === r.producto_id)?.precio_actual ?? 0,
-        precio_sugerido: toNumber(r.precio_sugerido, 0),
-        diferencia: toNumber(r.diferencia, 0),
-        margen_estimado:
-          typeof r.margen_estimado === 'number' ? r.margen_estimado : null,
-        rotacion_diaria:
-          typeof r.rotacion_diaria === 'number'
-            ? r.rotacion_diaria
-            : productosPayload.find((p) => p.producto_id === r.producto_id)?.rotacion_diaria ?? 0,
-      }))
+      .map((r) => {
+        const base = productosPayload.find((p) => p.producto_id === r.producto_id);
+        const costo = Math.max(0, toNumber(base?.precio_costo, 0));
+        const precioActual = Math.max(0, toNumber(base?.precio_actual, 0));
+        if (costo <= 0) {
+          return {
+            producto_id: r.producto_id,
+            producto_nombre: r.producto_nombre,
+            precio_actual: precioActual,
+            precio_sugerido: precioActual,
+            diferencia: 0,
+            margen_estimado: null,
+            rotacion_diaria: toNumber(base?.rotacion_diaria, 0),
+          };
+        }
+        const precioSugerido = toNumber(r.precio_sugerido, 0);
+        const margenEstimadoRaw = typeof r.margen_estimado === 'number' ? r.margen_estimado : null;
+        const margenEstimado =
+          margenEstimadoRaw != null
+            ? margenEstimadoRaw
+            : costo > 0 && precioSugerido > 0
+            ? Number(((precioSugerido - costo) / precioSugerido).toFixed(3))
+            : null;
+        return {
+          producto_id: r.producto_id,
+          producto_nombre: r.producto_nombre,
+          precio_actual: precioActual,
+          precio_sugerido: precioSugerido,
+          diferencia: toNumber(r.diferencia, 0),
+          margen_estimado: margenEstimado,
+          rotacion_diaria:
+            typeof r.rotacion_diaria === 'number' ? r.rotacion_diaria : toNumber(base?.rotacion_diaria, 0),
+        };
+      })
       .sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia))
       .slice(0, Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500));
 
@@ -782,7 +833,17 @@ async function insights({ historyDays = 90, forecastDays = 14, limit = 12 } = {}
   }
 
   const overstockCandidates = forecastList
-    .filter((r) => r.daily_avg > 0 && r.cobertura_dias >= config.overstockDays)
+    .filter((r) => {
+      const avg = toNumber(r.daily_avg, 0);
+      if (avg <= 0) return false;
+      if (avg < config.overstockMinDailyAvg) return false;
+      const histUnits = toNumber(
+        typeof r.history_units !== 'undefined' ? r.history_units : avg * historyDays,
+        0
+      );
+      if (histUnits < config.overstockMinUnits) return false;
+      return r.cobertura_dias >= config.overstockDays;
+    })
     .sort((a, b) => b.cobertura_dias - a.cobertura_dias)
     .slice(0, Math.max(finalLimit, 6));
 
@@ -804,6 +865,8 @@ async function insights({ historyDays = 90, forecastDays = 14, limit = 12 } = {}
   const priceCandidates = (pricingRecs || [])
     .filter((r) => {
       const precio = toNumber(r.precio_actual, 0);
+      const sugerido = toNumber(r.precio_sugerido, 0);
+      if (sugerido <= 0) return false;
       const diff = Math.abs(toNumber(r.diferencia, 0));
       if (!precio && !config.priceAlertAbs) return false;
       const pct = precio ? diff / precio : 0;
