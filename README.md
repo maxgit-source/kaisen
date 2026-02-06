@@ -75,7 +75,7 @@ Este sistema maneja información financiera sensible. Se han implementado múlti
 
 ### Contacto
 
-Este proyecto fue desarrollado por **[Tu Nombre]**.
-Para consultas sobre la arquitectura o implementación técnica, por favor contactar a través de [Tu Email/LinkedIn].
+Este proyecto fue desarrollado por **[Maximo Lavagetto]**.
+Para consultas sobre la arquitectura o implementación técnica, por favor contactar a través de [maxilavagetto@gmail.com].
 
 © 2026 Argensystem. Todos los derechos reservados.
