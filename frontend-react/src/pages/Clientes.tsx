@@ -790,11 +790,9 @@ export default function Clientes() {
 
 
     return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
-        Clientes
-      </h2>
-      <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+    <div className="space-y-6">
+      <h2 className="app-title">Clientes</h2>
+      <div className="app-card p-4">
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -1104,7 +1102,7 @@ export default function Clientes() {
             {editingCliente && (
               <button
                 type="button"
-                className="h-11 rounded-lg bg-white/5 border border-white/10 text-slate-200 px-4 text-sm"
+                className="input-modern text-sm"
                 onClick={() => {
                   setEditingCliente(null);
                   setForm({
@@ -1135,7 +1133,7 @@ export default function Clientes() {
           </div>
         </form>
       </div>
-      <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+      <div className="app-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="relative w-full md:max-w-sm">
             <Search
@@ -1153,7 +1151,7 @@ export default function Clientes() {
           {q ? (
             <button
               type="button"
-              className="h-10 rounded-lg bg-white/5 border border-white/10 text-slate-200 px-3 text-xs"
+              className="input-modern text-xs"
               onClick={() => setQ('')}
             >
               Limpiar
@@ -1265,7 +1263,7 @@ export default function Clientes() {
         </div>
       </div>
       {selectedCliente && (
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+      <div className="app-card p-4">
           <div className="flex items-start justify-between mb-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-100">Detalle de cliente</h3>
@@ -1729,7 +1727,7 @@ export default function Clientes() {
 
       {showHistorialModal && selectedCliente && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70">
-          <div className="bg-slate-900 rounded-2xl border border-white/10 shadow-xl w-full max-w-4xl p-4 space-y-4">
+          <div className="app-card w-full max-w-4xl p-4 space-y-4">
             <div className="flex items-center justify-between mb-2">
               <div>
                 <div className="text-sm text-slate-400">Historial de pagos y entregas</div>

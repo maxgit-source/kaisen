@@ -53,6 +53,15 @@ export default function ConfiguracionAdmin() {
   const [backupLoading, setBackupLoading] = useState(false);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
+  const [backupStatus, setBackupStatus] = useState<any | null>(null);
+  const [backupStatusLoading, setBackupStatusLoading] = useState(false);
+  const [backupSettings, setBackupSettings] = useState({
+    enabled: true,
+    interval_hours: '24',
+    retention_days: '7',
+    external_dir: '',
+  });
+  const [backupSettingsSaving, setBackupSettingsSaving] = useState(false);
   const [factoryResetting, setFactoryResetting] = useState(false);
   const [priceLabels, setPriceLabels] = useState({ local: '', distribuidor: '', final: '' });
   const [priceLabelsLoading, setPriceLabelsLoading] = useState(false);
@@ -289,6 +298,35 @@ export default function ConfiguracionAdmin() {
   useEffect(() => {
     let active = true;
     (async () => {
+      setBackupStatusLoading(true);
+      setBackupError(null);
+      try {
+        const data = await Api.backupStatus();
+        if (!active) return;
+        setBackupStatus(data);
+        setBackupSettings({
+          enabled: Boolean(data?.settings?.enabled),
+          interval_hours: String(data?.settings?.interval_hours ?? '24'),
+          retention_days: String(data?.settings?.retention_days ?? '7'),
+          external_dir: data?.settings?.external_dir || '',
+        });
+      } catch (err) {
+        if (!active) return;
+        setBackupError(
+          err instanceof Error ? err.message : 'No se pudo cargar estado de backups'
+        );
+      } finally {
+        if (active) setBackupStatusLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
       setBackupLoading(true);
       setBackupError(null);
       try {
@@ -378,6 +416,36 @@ export default function ConfiguracionAdmin() {
       );
     } finally {
       setDeudaSaving(false);
+    }
+  }
+
+  function formatBackupDate(value?: string | null) {
+    if (!value) return 'Nunca';
+    try {
+      return new Date(value).toLocaleString();
+    } catch {
+      return 'Nunca';
+    }
+  }
+
+  async function refreshBackupStatus(opts: { updateSettings?: boolean } = {}) {
+    setBackupStatusLoading(true);
+    setBackupError(null);
+    try {
+      const data = await Api.backupStatus();
+      setBackupStatus(data);
+      if (opts.updateSettings && data?.settings) {
+        setBackupSettings({
+          enabled: Boolean(data.settings.enabled),
+          interval_hours: String(data.settings.interval_hours ?? '24'),
+          retention_days: String(data.settings.retention_days ?? '7'),
+          external_dir: data.settings.external_dir || '',
+        });
+      }
+    } catch (err) {
+      setBackupError(err instanceof Error ? err.message : 'No se pudo cargar estado de backups');
+    } finally {
+      setBackupStatusLoading(false);
     }
   }
 
@@ -745,12 +813,39 @@ export default function ConfiguracionAdmin() {
     setBackupSuccess(null);
     setBackupLoading(true);
     try {
-      await Api.createBackup();
+      const res = await Api.createBackup();
       const data = await Api.listBackups();
       setBackups(Array.isArray(data) ? data : []);
-      setBackupSuccess('Backup creado');
+      if (res?.backup?.mirror_error) {
+        setBackupSuccess(`Backup creado. Aviso: ${res.backup.mirror_error}`);
+      } else {
+        setBackupSuccess('Backup creado');
+      }
+      await refreshBackupStatus();
     } catch (err) {
       setBackupError(err instanceof Error ? err.message : 'No se pudo crear el backup');
+    } finally {
+      setBackupLoading(false);
+    }
+  }
+
+  async function onDownloadBackup(filename: string) {
+    setBackupError(null);
+    setBackupSuccess(null);
+    setBackupLoading(true);
+    try {
+      const blob = await Api.descargarBackup(filename);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setBackupSuccess('Backup descargado');
+    } catch (err) {
+      setBackupError(err instanceof Error ? err.message : 'No se pudo descargar el backup');
     } finally {
       setBackupLoading(false);
     }
@@ -765,10 +860,44 @@ export default function ConfiguracionAdmin() {
     try {
       await Api.restoreBackup(filename);
       setBackupSuccess('Backup restaurado');
+      await refreshBackupStatus();
     } catch (err) {
       setBackupError(err instanceof Error ? err.message : 'No se pudo restaurar el backup');
     } finally {
       setBackupLoading(false);
+    }
+  }
+
+  async function onSaveBackupSettings(e: FormEvent) {
+    e.preventDefault();
+    setBackupError(null);
+    setBackupSuccess(null);
+    const interval = Number(backupSettings.interval_hours);
+    if (!Number.isFinite(interval) || interval < 0) {
+      setBackupError('Intervalo invalido (debe ser mayor o igual a 0)');
+      return;
+    }
+    const retention = Number(backupSettings.retention_days);
+    if (!Number.isFinite(retention) || retention < 0) {
+      setBackupError('Retencion invalida (debe ser mayor o igual a 0)');
+      return;
+    }
+    setBackupSettingsSaving(true);
+    try {
+      await Api.saveBackupSettings({
+        enabled: Boolean(backupSettings.enabled),
+        interval_hours: interval,
+        retention_days: retention,
+        external_dir: backupSettings.external_dir?.trim() || '',
+      });
+      setBackupSuccess('Configuracion de backups guardada');
+      await refreshBackupStatus({ updateSettings: true });
+    } catch (err) {
+      setBackupError(
+        err instanceof Error ? err.message : 'No se pudo guardar la configuracion'
+      );
+    } finally {
+      setBackupSettingsSaving(false);
     }
   }
 
@@ -795,13 +924,14 @@ export default function ConfiguracionAdmin() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-100">
-        Configuración
-      </h2>
+    <div className="space-y-6">
+      <div>
+        <div className="app-title">Configuracion</div>
+        <div className="app-subtitle">Panel de administracion y licencias</div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Datos del negocio</div>
           <div className="space-y-3">
             <input
@@ -819,7 +949,7 @@ export default function ConfiguracionAdmin() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">
             Umbral de deuda (rojo, ARS)
           </div>
@@ -853,7 +983,7 @@ export default function ConfiguracionAdmin() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Branding</div>
           <div className="space-y-3">
             <input
@@ -869,7 +999,7 @@ export default function ConfiguracionAdmin() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Nombres de precios</div>
           <div className="space-y-3 text-sm">
             {priceLabelsError && <Alert kind="error" message={priceLabelsError} />}
@@ -928,7 +1058,7 @@ export default function ConfiguracionAdmin() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Metodos de pago</div>
           <div className="space-y-3 text-sm">
             {metodosError && <Alert kind="error" message={metodosError} />}
@@ -1085,7 +1215,7 @@ export default function ConfiguracionAdmin() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Ranking de vendedores</div>
           <div className="space-y-3 text-sm">
             {rankingError && <Alert kind="error" message={rankingError} />}
@@ -1120,7 +1250,7 @@ export default function ConfiguracionAdmin() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Zonas de clientes</div>
           <div className="space-y-3 text-sm">
             {zonasError && <Alert kind="error" message={zonasError} />}
@@ -1202,7 +1332,7 @@ export default function ConfiguracionAdmin() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Licencia de usuarios</div>
           <div className="space-y-3 text-sm text-slate-300">
             {licenseLoading && <div className="text-xs text-slate-400">Cargando licencia...</div>}
@@ -1286,7 +1416,7 @@ export default function ConfiguracionAdmin() {
             </form>
           </div>
         </div>
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Vinculacion cloud</div>
           <div className="space-y-3 text-sm text-slate-300">
             {cloudLoading && <div className="text-xs text-slate-400">Cargando estado cloud...</div>}
@@ -1391,7 +1521,7 @@ export default function ConfiguracionAdmin() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Red permitida</div>
           <div className="space-y-3 text-sm">
             {networkError && <Alert kind="error" message={networkError} />}
@@ -1436,11 +1566,32 @@ export default function ConfiguracionAdmin() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Backups</div>
           <div className="space-y-3 text-sm">
             {backupError && <Alert kind="error" message={backupError} />}
             {backupSuccess && <Alert kind="info" message={backupSuccess} />}
+            {backupStatusLoading && (
+              <div className="text-xs text-slate-500">Cargando estado de backups...</div>
+            )}
+            {backupStatus && (
+              <div className="text-xs text-slate-400 space-y-1">
+                <div>Ultimo intento: {formatBackupDate(backupStatus.last_run_at)}</div>
+                <div>Ultimo exito: {formatBackupDate(backupStatus.last_success_at)}</div>
+                {backupStatus.last_filename && (
+                  <div className="truncate">Archivo: {backupStatus.last_filename}</div>
+                )}
+                <div>
+                  Proximo:{" "}
+                  {backupStatus.scheduler_active && backupStatus.next_run_at
+                    ? formatBackupDate(backupStatus.next_run_at)
+                    : "Desactivado"}
+                </div>
+                {backupStatus.last_error && (
+                  <div className="text-amber-300">Ultimo error: {backupStatus.last_error}</div>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={onCreateBackup}
@@ -1468,23 +1619,117 @@ export default function ConfiguracionAdmin() {
                       {b.created_at ? new Date(b.created_at).toLocaleString() : ''}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    className="text-xs text-amber-300 hover:text-amber-100"
-                    onClick={() => onRestoreBackup(b.filename)}
-                    disabled={backupLoading}
-                  >
-                    Restaurar
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-xs text-slate-300 hover:text-white"
+                      onClick={() => onDownloadBackup(b.filename)}
+                      disabled={backupLoading}
+                    >
+                      Descargar
+                    </button>
+                    <button
+                      type="button"
+                      className="text-xs text-amber-300 hover:text-amber-100"
+                      onClick={() => onRestoreBackup(b.filename)}
+                      disabled={backupLoading}
+                    >
+                      Restaurar
+                    </button>
+                  </div>
                 </div>
               ))}
+            </div>
+            <div className="pt-3 mt-3 border-t border-white/10">
+              <form onSubmit={onSaveBackupSettings} className="space-y-2">
+                <label className="flex items-center gap-2 text-xs text-slate-400">
+                  <input
+                    type="checkbox"
+                    className="rounded border-slate-500"
+                    checked={backupSettings.enabled}
+                    onChange={(e) =>
+                      setBackupSettings((prev) => ({ ...prev, enabled: e.target.checked }))
+                    }
+                    disabled={backupSettingsSaving}
+                  />
+                  Backups automaticos
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Intervalo (horas)
+                    </label>
+                    <input
+                      className="input-modern w-full text-sm"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={backupSettings.interval_hours}
+                      onChange={(e) =>
+                        setBackupSettings((prev) => ({
+                          ...prev,
+                          interval_hours: e.target.value,
+                        }))
+                      }
+                      disabled={backupSettingsSaving}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Retencion (dias)
+                    </label>
+                    <input
+                      className="input-modern w-full text-sm"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={backupSettings.retention_days}
+                      onChange={(e) =>
+                        setBackupSettings((prev) => ({
+                          ...prev,
+                          retention_days: e.target.value,
+                        }))
+                      }
+                      disabled={backupSettingsSaving}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Carpeta externa (OneDrive/NAS)
+                  </label>
+                  <input
+                    className="input-modern w-full text-sm"
+                    placeholder="C:\\Users\\...\\OneDrive\\Backups o \\\\NAS\\Backups"
+                    value={backupSettings.external_dir}
+                    onChange={(e) =>
+                      setBackupSettings((prev) => ({
+                        ...prev,
+                        external_dir: e.target.value,
+                      }))
+                    }
+                    disabled={backupSettingsSaving}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="h-9 rounded-lg bg-indigo-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={backupSettingsSaving}
+                >
+                  {backupSettingsSaving ? 'Guardando...' : 'Guardar configuracion'}
+                </button>
+                <p className="text-xs text-slate-400">
+                  Sugerencia: usa una carpeta sincronizada (OneDrive/Google Drive) o una ruta de red.
+                  Intervalo 0 o desactivar = sin backups automaticos.
+                </p>
+              </form>
             </div>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">
             Dólar blue para precios
           </div>
@@ -1518,7 +1763,7 @@ export default function ConfiguracionAdmin() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Herramientas avanzadas</div>
           <div className="space-y-3">
             {resetError && <Alert kind="error" message={resetError} />}
@@ -1554,7 +1799,7 @@ export default function ConfiguracionAdmin() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">
             Permisos de depИsitos por usuario
           </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import ChartCard from '../ui/ChartCard';
 import DataTable from '../ui/DataTable';
 import { Api } from '../lib/api';
@@ -344,7 +344,7 @@ export default function Ventas() {
   async function validarReferido() {
     const code = referidoCodigo.trim();
     if (!code) {
-      setReferidoError('Ingresá un código de referido');
+      setReferidoError('Ingresa un codigo de referido');
       setReferidoInfo(null);
       return;
     }
@@ -377,7 +377,7 @@ export default function Ventas() {
         .filter(it => it.producto_id > 0 && it.cantidad > 0 && it.precio_unitario > 0);
 
       if (!cleanItems.length) {
-        setError('Agrega al menos un producto con cantidad y precio válidos');
+        setError('Agrega al menos un producto con cantidad y precio vÃ¡lidos');
         return;
       }
       const body = {
@@ -413,7 +413,7 @@ export default function Ventas() {
   }
 
   async function ocultarVenta(venta: Venta) {
-    if (!window.confirm(`¿Ocultar la venta #${venta.id} del listado principal?`)) return;
+    if (!window.confirm(`Â¿Ocultar la venta #${venta.id} del listado principal?`)) return;
     try {
       await Api.ocultarVenta(venta.id);
       await loadAll();
@@ -631,28 +631,28 @@ export default function Ventas() {
         <button onClick={() => setOpen(o => !o)} className="px-3 py-1.5 rounded bg-primary-500/20 border border-primary-500/30 hover:bg-primary-500/30 text-primary-200 text-sm">{open ? 'Cancelar' : 'Nueva venta'}</button>
       }>
         {open && (
-          <div className="mb-4 p-3 rounded-lg border border-white/10 bg-white/5 space-y-3">
+          <div className="mb-4 p-3 app-panel space-y-3">
             {error && <div className="text-rose-300 text-sm">{error}</div>}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <label className="text-sm">
                 <div className="text-slate-400 mb-1">Cliente</div>
-                <select value={clienteId} onChange={(e) => setClienteId(e.target.value ? Number(e.target.value) : '')} className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm">
-                  <option value="">Seleccionar…</option>
+                <select value={clienteId} onChange={(e) => setClienteId(e.target.value ? Number(e.target.value) : '')} className="w-full input-modern text-sm">
+                  <option value="">Seleccionar</option>
                   {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}{c.apellido ? ` ${c.apellido}` : ''}</option>)}
                 </select>
               </label>
               <label className="text-sm">
                 <div className="text-slate-400 mb-1">Fecha</div>
-                <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm" />
+                <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-full input-modern text-sm" />
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="text-sm">
                   <div className="text-slate-400 mb-1">Descuento</div>
-                  <input type="number" step="0.01" value={descuento} onChange={(e) => setDescuento(Number(e.target.value))} className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm" />
+                  <input type="number" step="0.01" value={descuento} onChange={(e) => setDescuento(Number(e.target.value))} className="w-full input-modern text-sm" />
                 </label>
                 <label className="text-sm">
                   <div className="text-slate-400 mb-1">Impuestos</div>
-                  <input type="number" step="0.01" value={impuestos} onChange={(e) => setImpuestos(Number(e.target.value))} className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm" />
+                  <input type="number" step="0.01" value={impuestos} onChange={(e) => setImpuestos(Number(e.target.value))} className="w-full input-modern text-sm" />
                 </label>
               </div>
             </div>
@@ -663,7 +663,7 @@ export default function Ventas() {
                 <select
                   value={depositoId}
                   onChange={(e) => setDepositoId(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                  className="w-full input-modern text-sm"
                 >
                   <option value="">Seleccionar...</option>
                   {depositos.map((d) => (
@@ -688,7 +688,7 @@ export default function Ventas() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <label className="text-sm md:col-span-2">
-                <div className="text-slate-400 mb-1">Código de referido</div>
+                <div className="text-slate-400 mb-1">Codigo de referido</div>
                 <div className="flex gap-2">
                   <input
                     value={referidoCodigo}
@@ -699,7 +699,7 @@ export default function Ventas() {
                         validarReferido();
                       }
                     }}
-                    className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                    className="w-full input-modern text-sm"
                     placeholder="Ej: REF-ABC123"
                   />
                   <button
@@ -774,7 +774,7 @@ export default function Ventas() {
                             }}
                             className="bg-white/10 border border-white/10 rounded px-2 py-1"
                           >
-                            <option value="">Seleccionar…</option>
+                            <option value="">Seleccionar</option>
                             {productos.map(p => <option key={p.id} value={p.id}>{p.name} {p.category_name ? `(${p.category_name})` : ''}</option>)}
                           </select>
                         </td>
@@ -801,7 +801,7 @@ export default function Ventas() {
                 </tbody>
               </table>
               <div className="mt-2">
-                <button onClick={addItemRow} className="px-2 py-1 rounded bg-white/10 border border-white/10 hover:bg-white/15 text-slate-200 text-xs">+ Agregar ítem</button>
+                <button onClick={addItemRow} className="px-2 py-1 rounded bg-white/10 border border-white/10 hover:bg-white/15 text-slate-200 text-xs">+ Agregar Ã­tem</button>
               </div>
             </div>
 
@@ -975,7 +975,7 @@ export default function Ventas() {
 
       {detalleVenta.abierto && detalleVenta.venta && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70">
-          <div className="bg-slate-900 rounded-2xl border border-white/10 shadow-xl w-full max-w-3xl p-4 space-y-4">
+          <div className="app-card w-full max-w-3xl p-4 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm text-slate-400">Detalle de venta</div>
@@ -1043,7 +1043,7 @@ export default function Ventas() {
               </div>
             )}
 
-            <div className="mt-4 p-3 rounded-lg border border-white/10 bg-white/5 space-y-3">
+            <div className="mt-4 p-3 app-panel space-y-3">
               <div className="text-sm font-semibold text-slate-200">Factura ARCA</div>
               {facturaLoading && <div className="text-xs text-slate-400">Cargando factura...</div>}
               {facturaError && <div className="text-xs text-rose-300">{facturaError}</div>}
@@ -1170,7 +1170,7 @@ export default function Ventas() {
 
       {remitoModal.abierto && remitoModal.venta && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="bg-slate-900 rounded-2xl border border-white/10 shadow-xl w-full max-w-2xl p-4 space-y-4">
+          <div className="app-card w-full max-w-2xl p-4 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm text-slate-400">Remito de entrega</div>
@@ -1207,7 +1207,7 @@ export default function Ventas() {
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                className="h-9 rounded-lg bg-white/5 border border-white/10 text-slate-200 px-4 text-sm"
+                className="input-modern text-sm"
                 onClick={cerrarRemitoModal}
                 disabled={remitoModal.loading}
               >
@@ -1228,3 +1228,4 @@ export default function Ventas() {
     </div>
   );
 }
+

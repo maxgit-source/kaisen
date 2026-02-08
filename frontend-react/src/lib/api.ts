@@ -64,6 +64,49 @@ export async function setupAdmin(payload: {
   return res.json();
 }
 
+export async function restoreBackupSetup(file: File): Promise<any> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(apiUrl('/api/setup/restore-backup'), {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    let msg = 'No se pudo restaurar el backup';
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch (_) {}
+    throw new Error(msg);
+  }
+  return await res.json();
+}
+
+export async function licenseInstallId(): Promise<{ install_id: string | null; demo_expired?: boolean; demo_expires_at?: string | null }> {
+  const res = await fetch(apiUrl('/api/license/install-id'), { method: 'GET' });
+  if (!res.ok) {
+    throw new Error('No se pudo obtener el ID de instalacion');
+  }
+  return res.json();
+}
+
+export async function activateLicensePublic(code: string): Promise<{ message?: string }> {
+  const res = await fetch(apiUrl('/api/license/activate-public'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    let msg = 'No se pudo activar la licencia';
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch (_) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 async function refreshAccessToken(): Promise<string | null> {
   const rt = getRefreshToken();
   if (!rt) return null;
@@ -191,6 +234,8 @@ export const Api = {
       body: JSON.stringify({ valor }),
     }),
   licenseStatus: () => apiFetch('/api/license/status'),
+  licenseInstallId: () => licenseInstallId(),
+  activateLicensePublic: (code: string) => activateLicensePublic(code),
   activateLicense: (code: string) =>
     apiFetch('/api/license/activate', {
       method: 'POST',
@@ -214,12 +259,44 @@ export const Api = {
       body: JSON.stringify(body),
     }),
   listBackups: () => apiFetch('/api/backups'),
+  backupStatus: () => apiFetch('/api/backups/status'),
+  saveBackupSettings: (body: {
+    enabled?: boolean;
+    interval_hours?: number;
+    retention_days?: number;
+    external_dir?: string;
+  }) =>
+    apiFetch('/api/backups/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   createBackup: () => apiFetch('/api/backups', { method: 'POST' }),
   restoreBackup: (filename: string) =>
     apiFetch('/api/backups/restore', {
       method: 'POST',
       body: JSON.stringify({ filename }),
     }),
+  descargarBackup: async (filename: string): Promise<Blob> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers['Authorization'] = `Bearer ${at}`;
+    const res = await fetch(
+      apiUrl(`/api/backups/download/${encodeURIComponent(filename)}`),
+      {
+        method: 'GET',
+        headers,
+      }
+    );
+    if (!res.ok) {
+      let msg = 'No se pudo descargar el backup';
+      try {
+        const data = await res.json();
+        if (data?.error) msg = data.error;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    return await res.blob();
+  },
 
   // Depósitos
   depositos: (opts: { incluirInactivos?: boolean } = {}) => {

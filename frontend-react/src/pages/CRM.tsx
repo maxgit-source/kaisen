@@ -232,32 +232,36 @@ export default function CRM() {
 
   return (
     <div className="space-y-6">
+      <div>
+        <div className="app-title">CRM</div>
+        <div className="app-subtitle">Embudo, actividades y recomendaciones</div>
+      </div>
       <ChartCard title="Embudo de oportunidades" right={
         <div className="flex items-center gap-2">
-          <select value={fase} onChange={(e) => setFase(e.target.value)} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-sm">
+          <select value={fase} onChange={(e) => setFase(e.target.value)} className="input-modern text-sm">
             <option value="">Todas</option>
             {fases.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
-          <button onClick={() => setShowOppForm(s => !s)} className="px-2 py-1 rounded bg-primary-500/20 border border-primary-500/30 hover:bg-primary-500/30 text-primary-200 text-xs">
+          <button onClick={() => setShowOppForm(s => !s)} className="px-2 py-1 rounded-lg bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/30 text-primary-200 text-xs">
             {showOppForm ? 'Cancelar' : 'Nueva oportunidad'}
           </button>
         </div>
       }>
         {showOppForm && (
-          <div className="mb-4 p-3 rounded-lg border border-white/10 bg-white/5">
+          <div className="mb-4 p-3 app-panel">
             {oppError && <div className="mb-2 text-rose-300 text-sm">{oppError}</div>}
             <div className="grid grid-cols-1 md:grid-cols-6 gap-2 text-sm">
-              <select value={oppForm.cliente_id} onChange={(e)=>setOppForm({...oppForm, cliente_id: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1">
+              <select value={oppForm.cliente_id} onChange={(e)=>setOppForm({...oppForm, cliente_id: e.target.value})} className="input-modern text-sm">
                 <option value="">Cliente</option>
                 {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}{c.apellido?` ${c.apellido}`:''}</option>)}
               </select>
-              <input value={oppForm.titulo} onChange={(e)=>setOppForm({...oppForm, titulo: e.target.value})} placeholder="Título" className="bg-white/10 border border-white/10 rounded px-2 py-1 md:col-span-2" />
-              <select value={oppForm.fase} onChange={(e)=>setOppForm({...oppForm, fase: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1">
+              <input value={oppForm.titulo} onChange={(e)=>setOppForm({...oppForm, titulo: e.target.value})} placeholder="Título" className="input-modern text-sm md:col-span-2" />
+              <select value={oppForm.fase} onChange={(e)=>setOppForm({...oppForm, fase: e.target.value})} className="input-modern text-sm">
                 {fases.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
-              <input type="number" placeholder="Valor estimado" value={oppForm.valor_estimado} onChange={(e)=>setOppForm({...oppForm, valor_estimado: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1" />
-              <input type="number" placeholder="Probabilidad %" value={oppForm.probabilidad} onChange={(e)=>setOppForm({...oppForm, probabilidad: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1" />
-              <input type="date" value={oppForm.fecha_cierre_estimada} onChange={(e)=>setOppForm({...oppForm, fecha_cierre_estimada: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1" />
+              <input type="number" placeholder="Valor estimado" value={oppForm.valor_estimado} onChange={(e)=>setOppForm({...oppForm, valor_estimado: e.target.value})} className="input-modern text-sm" />
+              <input type="number" placeholder="Probabilidad %" value={oppForm.probabilidad} onChange={(e)=>setOppForm({...oppForm, probabilidad: e.target.value})} className="input-modern text-sm" />
+              <input type="date" value={oppForm.fecha_cierre_estimada} onChange={(e)=>setOppForm({...oppForm, fecha_cierre_estimada: e.target.value})} className="input-modern text-sm" />
             </div>
             <div className="mt-3 flex justify-end">
               <button onClick={crearOportunidad} className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/30 hover:bg-emerald-500/30 text-emerald-200 text-sm">Crear</button>
@@ -303,7 +307,7 @@ export default function CRM() {
                     {(o.fase === 'ganado' || o.fase === 'perdido') && (
                       <button
                         onClick={() => ocultarOportunidad(o)}
-                        className="px-2 py-1 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-xs"
+                        className="px-2 py-1 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-xs"
                       >
                         Ocultar
                       </button>
@@ -343,28 +347,28 @@ export default function CRM() {
       </ChartCard>
 
       <ChartCard title="Actividades pendientes" right={
-        <button onClick={() => setShowActForm(s => !s)} className="px-2 py-1 rounded bg-primary-500/20 border border-primary-500/30 hover:bg-primary-500/30 text-primary-200 text-xs">
+        <button onClick={() => setShowActForm(s => !s)} className="px-2 py-1 rounded-lg bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/30 text-primary-200 text-xs">
           {showActForm ? 'Cancelar' : 'Nueva actividad'}
         </button>
       }>
         {showActForm && (
-          <div className="mb-4 p-3 rounded-lg border border-white/10 bg-white/5">
+          <div className="mb-4 p-3 app-panel">
             {actError && <div className="mb-2 text-rose-300 text-sm">{actError}</div>}
             <div className="grid grid-cols-1 md:grid-cols-6 gap-2 text-sm">
-              <select value={actForm.tipo} onChange={(e)=>setActForm({...actForm, tipo: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1">
+              <select value={actForm.tipo} onChange={(e)=>setActForm({...actForm, tipo: e.target.value})} className="input-modern text-sm">
                 {['llamada','reunion','tarea'].map(t => <option key={t} value={t}>{t}</option>)}
               </select>
-              <input value={actForm.asunto} onChange={(e)=>setActForm({...actForm, asunto: e.target.value})} placeholder="Asunto" className="bg-white/10 border border-white/10 rounded px-2 py-1 md:col-span-2" />
-              <select value={actForm.estado} onChange={(e)=>setActForm({...actForm, estado: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1">
+              <input value={actForm.asunto} onChange={(e)=>setActForm({...actForm, asunto: e.target.value})} placeholder="Asunto" className="input-modern text-sm md:col-span-2" />
+              <select value={actForm.estado} onChange={(e)=>setActForm({...actForm, estado: e.target.value})} className="input-modern text-sm">
                 {['pendiente','completado','cancelado'].map(s => <option key={s} value={s}>{s}</option>)}
               </select>
-              <input type="datetime-local" value={actForm.fecha_hora} onChange={(e)=>setActForm({...actForm, fecha_hora: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1" />
-              <input value={actForm.descripcion} onChange={(e)=>setActForm({...actForm, descripcion: e.target.value})} placeholder="Descripción (opcional)" className="bg-white/10 border border-white/10 rounded px-2 py-1 md:col-span-3" />
-              <select value={actForm.cliente_id} onChange={(e)=>setActForm({...actForm, cliente_id: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1">
+              <input type="datetime-local" value={actForm.fecha_hora} onChange={(e)=>setActForm({...actForm, fecha_hora: e.target.value})} className="input-modern text-sm" />
+              <input value={actForm.descripcion} onChange={(e)=>setActForm({...actForm, descripcion: e.target.value})} placeholder="Descripción (opcional)" className="input-modern text-sm md:col-span-3" />
+              <select value={actForm.cliente_id} onChange={(e)=>setActForm({...actForm, cliente_id: e.target.value})} className="input-modern text-sm">
                 <option value="">Cliente (opcional)</option>
                 {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}{c.apellido?` ${c.apellido}`:''}</option>)}
               </select>
-              <select value={actForm.oportunidad_id} onChange={(e)=>setActForm({...actForm, oportunidad_id: e.target.value})} className="bg-white/10 border border-white/10 rounded px-2 py-1">
+              <select value={actForm.oportunidad_id} onChange={(e)=>setActForm({...actForm, oportunidad_id: e.target.value})} className="input-modern text-sm">
                 <option value="">Oportunidad (opcional)</option>
                 {visibleOpps.map(o => <option key={o.id} value={o.id}>{o.titulo}</option>)}
               </select>

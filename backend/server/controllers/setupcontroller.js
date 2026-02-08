@@ -86,6 +86,7 @@ async function createAdmin(req, res) {
 const fs = require('fs');
 const { run: runMigrations } = require('../scripts/migrate');
 const { pool, dbPath } = require('../db/pg');
+const backupService = require('../services/backupService');
 
 async function resetDatabase(req, res) {
   if (!ENABLE_FACTORY_RESET) {
@@ -121,8 +122,31 @@ async function resetDatabase(req, res) {
   }
 }
 
+async function restoreBackup(req, res) {
+  const file = req.file;
+  if (!file || !file.path) {
+    return res.status(400).json({ error: 'Archivo requerido' });
+  }
+  try {
+    const hasAdmin = await users.hasAdmin();
+    if (hasAdmin) {
+      return res.status(403).json({ error: 'Setup ya completado' });
+    }
+    const info = await backupService.restoreFromUpload(file.path, file.originalname);
+    return res.json({ message: 'Backup restaurado', backup: info });
+  } catch (e) {
+    console.error('Setup restore error:', e.message);
+    return res.status(500).json({ error: 'No se pudo restaurar el backup' });
+  } finally {
+    try {
+      fs.unlinkSync(file.path);
+    } catch (_) {}
+  }
+}
+
 module.exports = {
   status,
   createAdmin: [...validateSetup, createAdmin],
   resetDatabase,
+  restoreBackup,
 };

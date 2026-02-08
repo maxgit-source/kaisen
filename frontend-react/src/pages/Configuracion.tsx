@@ -91,13 +91,14 @@ export default function Configuracion() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-100">
-        Configuración
-      </h2>
+    <div className="space-y-6">
+      <div>
+        <div className="app-title">Configuracion</div>
+        <div className="app-subtitle">Parametros base del sistema</div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Datos del negocio</div>
           <div className="space-y-3">
             <input
@@ -115,7 +116,7 @@ export default function Configuracion() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">Branding</div>
           <div className="space-y-3">
             <input
@@ -131,7 +132,7 @@ export default function Configuracion() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
+        <div className="app-card p-4">
           <div className="text-sm text-slate-300 mb-2">
             Dólar blue para precios
           </div>

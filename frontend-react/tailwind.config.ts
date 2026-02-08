@@ -10,6 +10,11 @@ export default {
       fontFamily: {
         display: ['"Space Grotesk"', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        login: ['"DM Sans"', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        logo: ['"Instrument Serif"', '"DM Sans"', 'ui-serif', 'Georgia', 'serif'],
+        ip: ['Monaco', 'Menlo', 'ui-monospace', 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'monospace'],
+        ui: ['"Outfit"', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        data: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'monospace'],
       },
       colors: {
         primary: {

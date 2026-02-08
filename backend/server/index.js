@@ -143,6 +143,8 @@ const baseAllowedOrigins = [
   'http://127.0.0.1:3000',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
 ];
 
 if (process.env.PUBLIC_ORIGIN) {
@@ -159,11 +161,13 @@ const corsAllowAll =
   process.env.CORS_ALLOW_ALL === 'true' ||
   process.env.CORS_ALLOWED_ORIGINS === '*';
 
-const allowNullOrigin = process.env.CORS_ALLOW_NULL === 'true';
+const allowNullOrigin =
+  process.env.CORS_ALLOW_NULL === 'true' ||
+  (process.env.CORS_ALLOW_NULL !== 'false' && process.env.NODE_ENV !== 'production');
 
 function corsOrigin(origin, callback) {
   if (corsAllowAll) return callback(null, true);
-  if (!origin) {
+  if (!origin || origin === 'null') {
     return allowNullOrigin
       ? callback(null, true)
       : callback(new Error('No permitido por CORS'));

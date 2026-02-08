@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { Users, Package, DollarSign, AlertTriangle, Printer } from 'lucide-react';
 import { motion } from 'framer-motion';
 import MetricCard from '../ui/MetricCard';
@@ -141,7 +141,7 @@ export default function Dashboard() {
         opsList.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
         setOps(opsList.slice(0, 5));
       } catch (e) {
-        setOpsError('No se pudieron cargar métricas y operaciones');
+        setOpsError('No se pudieron cargar mÃ©tricas y operaciones');
       } finally {
         setOpsLoading(false);
       }
@@ -225,15 +225,15 @@ export default function Dashboard() {
   };
   const severityStyles: Record<InsightSeverity, { card: string; badge: string }> = {
     high: {
-      card: 'border-rose-500/30 bg-rose-500/10',
+      card: 'border border-rose-500/30 border-l-[3px] border-l-rose-500/70 bg-rose-500/10 shadow-[0_14px_30px_rgba(244,63,94,0.18)]',
       badge: 'border-rose-500/30 bg-rose-500/20 text-rose-100',
     },
     medium: {
-      card: 'border-amber-500/30 bg-amber-500/10',
+      card: 'border border-amber-500/30 border-l-[3px] border-l-amber-500/70 bg-amber-500/10 shadow-[0_14px_30px_rgba(245,158,11,0.16)]',
       badge: 'border-amber-500/30 bg-amber-500/20 text-amber-100',
     },
     low: {
-      card: 'border-cyan-500/30 bg-cyan-500/10',
+      card: 'border border-cyan-500/30 border-l-[3px] border-l-cyan-500/70 bg-cyan-500/10 shadow-[0_14px_30px_rgba(34,211,238,0.16)]',
       badge: 'border-cyan-500/30 bg-cyan-500/20 text-cyan-100',
     },
   };
@@ -243,7 +243,7 @@ export default function Dashboard() {
     overstock: 'Sobre stock',
     price: 'Precio',
     debt: 'Deuda',
-    anomaly: 'Anomalía',
+    anomaly: 'AnomalÃ­a',
   };
 
   async function handlePrint() {
@@ -260,16 +260,17 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4"
+        className="app-card p-4 relative overflow-hidden"
       >
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#ff0080] via-[#00f5ff] to-[#8b5cf6] animate-[sweep_3s_linear_infinite]" />
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
-            <div className="text-xs uppercase tracking-wide text-slate-400">
+            <div className="text-[11px] uppercase tracking-[0.26em] text-slate-400">
               Recomendaciones y alertas
             </div>
             <div className="text-sm text-slate-200">
@@ -277,13 +278,13 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className="px-2 py-1 rounded-full border border-rose-500/30 bg-rose-500/10 text-rose-100">
+            <span className="app-badge border border-rose-500/40 bg-rose-500/15 text-rose-100">
               Altas {insightSummary.high}
             </span>
-            <span className="px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-100">
+            <span className="app-badge border border-amber-500/40 bg-amber-500/15 text-amber-100">
               Medias {insightSummary.medium}
             </span>
-            <span className="px-2 py-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-100">
+            <span className="app-badge border border-cyan-500/40 bg-cyan-500/15 text-cyan-100">
               Bajas {insightSummary.low}
             </span>
           </div>
@@ -293,7 +294,7 @@ export default function Dashboard() {
           {insightsLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div key={i} className="app-panel p-3">
                   <Skeleton className="h-3 w-24 mb-2" />
                   <Skeleton className="h-4 w-full mb-2" />
                   <Skeleton className="h-3 w-3/4" />
@@ -311,7 +312,7 @@ export default function Dashboard() {
                 const label = typeLabels[item.type] || 'Alerta';
                 const sevLabel = severityLabels[item.severity] || 'Media';
                 return (
-                  <div key={item.id} className={`rounded-xl border px-3 py-2 ${palette.card}`}>
+                  <div key={item.id} className={`rounded-xl border px-3 py-2 transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(0,0,0,0.35)] ${palette.card}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-[11px] uppercase tracking-wide text-slate-300">
@@ -346,13 +347,13 @@ export default function Dashboard() {
         variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } }}
       >
         {[
-          { t: 'Total clientes', v: clientesCount, i: <Users size={22} /> },
-          { t: 'Productos en stock', v: stockItems, i: <Package size={22} /> },
-          { t: 'Ganancia neta (período)', v: `$${gananciaPeriodo.toFixed(0)}`, i: <DollarSign size={22} /> },
-          { t: 'Deudas pendientes', v: `$${deudas.toFixed(0)}`, i: <AlertTriangle size={22} /> },
+          { t: 'Total clientes', v: clientesCount, i: <Users size={22} />, tone: 'pink' },
+          { t: 'Productos en stock', v: stockItems, i: <Package size={22} />, tone: 'purple' },
+          { t: 'Ganancia neta (periodo)', v: `$${gananciaPeriodo.toFixed(0)}`, i: <DollarSign size={22} />, tone: 'cyan' },
+          { t: 'Deudas pendientes', v: `$${deudas.toFixed(0)}`, i: <AlertTriangle size={22} />, tone: 'green' },
         ].map((m, idx) => (
           <motion.div key={idx} variants={{ hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }}>
-            <MetricCard title={m.t} value={m.v} icon={m.i} />
+            <MetricCard title={m.t} value={m.v} icon={m.i} tone={m.tone as any} />
           </motion.div>
         ))}
       </motion.div>
@@ -366,11 +367,11 @@ export default function Dashboard() {
                 <select
                   value={period}
                   onChange={(e) => setPeriod(e.target.value as PeriodKey)}
-                  className="bg-white/10 border border-white/10 rounded px-2 py-1"
+                  className="select-modern text-xs"
                 >
                   <option value="today">Hoy</option>
-                  <option value="7d">7 días</option>
-                  <option value="30d">30 días</option>
+                  <option value="7d">7 dÃ­as</option>
+                  <option value="30d">30 dÃ­as</option>
                   <option value="custom">Rango personalizado</option>
                 </select>
                 {period === 'custom' && (
@@ -379,31 +380,31 @@ export default function Dashboard() {
                       type="date"
                       value={customDesde}
                       onChange={(e) => setCustomDesde(e.target.value)}
-                      className="bg-white/10 border border-white/10 rounded px-2 py-1"
+                      className="input-modern text-xs"
                     />
                     <span className="text-slate-400">a</span>
                     <input
                       type="date"
                       value={customHasta}
                       onChange={(e) => setCustomHasta(e.target.value)}
-                      className="bg-white/10 border border-white/10 rounded px-2 py-1"
+                      className="input-modern text-xs"
                     />
                   </div>
                 )}
                 <select
                   value={chartType}
                   onChange={(e) => setChartType(e.target.value as ChartKind)}
-                  className="bg-white/10 border border-white/10 rounded px-2 py-1"
+                  className="select-modern text-xs"
                 >
-                  <option value="line">Línea</option>
+                  <option value="line">LÃ­nea</option>
                   <option value="bar">Barras</option>
-                  <option value="area">Áreas</option>
+                  <option value="area">Ãreas</option>
                 </select>
                 <button
                   type="button"
                   onClick={handlePrint}
                   disabled={!canPrint}
-                  className={`flex items-center gap-1 px-2 py-1 rounded border text-xs ${
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs ${
                     canPrint
                       ? 'bg-white/10 border-white/20 hover:bg-white/20 text-slate-100'
                       : 'bg-white/5 border-white/10 text-slate-500 cursor-not-allowed'
@@ -422,7 +423,7 @@ export default function Dashboard() {
                 <div className="h-full flex items-center justify-center text-slate-400 text-sm">{movError}</div>
               ) : !chartData.length ? (
                 <div className="h-full flex items-center justify-center text-slate-400 text-sm">
-                  No hay registros para el período seleccionado
+                  No hay registros para el perÃ­odo seleccionado
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -513,13 +514,13 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, delay: 0.08 }}
-          className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4"
+          className="app-card p-4"
         >
           <div className="text-sm font-semibold text-slate-200 mb-3">Radar</div>
           {insightsLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="rounded-lg border border-white/10 bg-white/5 p-2">
+                <div key={i} className="app-panel p-2">
                   <Skeleton className="h-3 w-24 mb-2" />
                   <Skeleton className="h-3 w-full" />
                 </div>
@@ -535,7 +536,7 @@ export default function Dashboard() {
                 const palette = severityStyles[item.severity] || severityStyles.low;
                 const sevLabel = severityLabels[item.severity] || 'Media';
                 return (
-                  <li key={item.id} className={`rounded-lg border px-2 py-2 ${palette.card}`}>
+                  <li key={item.id} className={`rounded-lg border px-2 py-2 transition-all duration-300 hover:translate-x-1 ${palette.card}`}>
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="truncate pr-2 text-slate-100">{item.title}</span>
                       <span className={`px-2 py-0.5 rounded-full border text-[10px] ${palette.badge}`}>
@@ -556,8 +557,8 @@ export default function Dashboard() {
         </motion.div>
       </div>
 
-      <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4">
-        <div className="text-sm text-slate-400 mb-3">Últimas operaciones</div>
+      <div className="app-card p-4">
+        <div className="text-sm text-slate-300 mb-3">Ultimas operaciones</div>
         <div className="overflow-x-auto">
           {opsLoading ? (
             <div className="py-6 text-center text-slate-400 text-sm">Cargando...</div>
@@ -592,3 +593,5 @@ export default function Dashboard() {
     </div>
   );
 }
+
+

@@ -785,121 +785,139 @@ export default function Finanzas() {
   const topProducto = useMemo(() => productosRentables[0] ?? null, [productosRentables]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-6">
+      <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Finanzas</h2>
-          {range && (
-            <p className="text-xs text-slate-500 mt-1">
-              Período: {range.desde} a {range.hasta}
-            </p>
+          <div className="text-2xl font-semibold bg-gradient-to-r from-slate-100 via-cyan-200 to-cyan-400 bg-clip-text text-transparent">
+            Finanzas
+          </div>
+          {range ? (
+            <div className="text-xs text-slate-400 font-data mt-1">
+              {range.desde} a {range.hasta}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500 mt-1">Rango sin definir</div>
           )}
+          <div className="text-[11px] text-slate-500 mt-1">Panel de costos y rentabilidad</div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            className="text-sm rounded-md border border-slate-300 bg-white dark:bg-slate-900 px-2 py-1"
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as PeriodKey)}
-          >
-            <option value="24h">Últimas 24h</option>
-            <option value="7d">Últimos 7 días</option>
-            <option value="30d">Últimos 30 días</option>
-            <option value="custom">Personalizado</option>
-          </select>
+          <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2 py-1">
+            <span className="text-[11px] text-slate-400 uppercase tracking-[0.2em]">Periodo</span>
+            <select
+              className="input-modern text-xs h-8"
+              value={period}
+              onChange={(e) => setPeriod(e.target.value as PeriodKey)}
+            >
+              <option value="24h">Ultimas 24h</option>
+              <option value="7d">Ultimos 7 dias</option>
+              <option value="30d">Ultimos 30 dias</option>
+              <option value="custom">Personalizado</option>
+            </select>
+          </div>
           {period === 'custom' && (
-            <>
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2 py-1">
+              <span className="text-[11px] text-slate-400 uppercase tracking-[0.2em]">Rango</span>
               <input
                 type="date"
-                className="text-sm rounded-md border border-slate-300 bg-white dark:bg-slate-900 px-2 py-1"
+                className="input-modern text-xs h-8"
                 value={customDesde}
                 onChange={(e) => setCustomDesde(e.target.value)}
               />
               <input
                 type="date"
-                className="text-sm rounded-md border border-slate-300 bg-white dark:bg-slate-900 px-2 py-1"
+                className="input-modern text-xs h-8"
                 value={customHasta}
                 onChange={(e) => setCustomHasta(e.target.value)}
               />
-            </>
+            </div>
           )}
         </div>
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-sm">
+        <div className="app-card border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
           {error}
         </div>
       )}
 
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-semibold">DiagnÃ³stico</span>
-          <Button
-            onClick={handleDebug}
-            disabled={debugLoading}
-            className="h-8 px-3 text-xs"
-          >
-            {debugLoading ? 'Revisando...' : 'Verificar ventas/gastos'}
-          </Button>
-          {debugError && <span className="text-red-600">{debugError}</span>}
+      <div className="app-card finance-card p-3">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Acciones</div>
+            <div className="text-sm text-slate-200">Diagnostico rapido del periodo</div>
+            {debugError && <div className="text-xs text-rose-300 mt-1">{debugError}</div>}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={handleDebug}
+              disabled={debugLoading}
+              className="h-9 px-3 text-xs"
+            >
+              {debugLoading ? 'Revisando...' : 'Verificar ventas/gastos'}
+            </Button>
+            <Button type="button" variant="ghost" className="h-9 px-3 text-xs">
+              Diagnostico
+            </Button>
+            <Button type="button" variant="outline" className="h-9 px-3 text-xs">
+              Exportar datos
+            </Button>
+          </div>
         </div>
         {debugInfo && (
-          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap bg-white border border-slate-200 rounded p-2">
+          <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/40 p-2 text-xs text-slate-200">
             {JSON.stringify(debugInfo, null, 2)}
           </pre>
         )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-xs text-slate-500 mb-1">Ganancia neta del período</div>
-          <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">
+        <div className="app-card finance-card p-4">
+          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Ganancia neta del periodo</div>
+          <div className="text-2xl font-semibold font-data text-emerald-200">
             ${totalGananciaNeta.toFixed(0)}
           </div>
+          <div className="text-xs text-slate-500 mt-2">Resultado consolidado del rango actual</div>
         </div>
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-xs text-slate-500 mb-1">Costos de productos (total)</div>
-          <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">
+        <div className="app-card finance-card p-4">
+          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Costos de productos</div>
+          <div className="text-2xl font-semibold font-data text-cyan-200">
             ${totalCostosPeriodo.toFixed(0)}
           </div>
+          <div className="text-xs text-slate-500 mt-2">Total del periodo seleccionado</div>
         </div>
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-xs text-slate-500 mb-1">Producto más rentable</div>
+        <div className="app-card finance-card p-4">
+          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Producto mas rentable</div>
           {topProducto ? (
             <div>
-              <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
+              <div className="text-sm font-medium text-slate-100">
                 {topProducto.productoNombre}
               </div>
-              <div className="text-xs text-slate-500 mt-1">
+              <div className="text-xs text-slate-400 mt-1">
                 Ganancia bruta: ${topProducto.gananciaBruta.toFixed(0)}{' '}
                 {topProducto.margenPorcentaje != null && `(${topProducto.margenPorcentaje.toFixed(1)}%)`}
               </div>
             </div>
           ) : (
-            <div className="text-sm text-slate-500">Sin datos en el período</div>
+            <div className="text-sm text-slate-500">Sin datos en el periodo</div>
           )}
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-slate-700">
+      <div className="finance-tablist app-scrollbar">
         {[
           { key: 'bruta', label: 'Ganancia bruta' },
           { key: 'neta', label: 'Ganancia neta' },
           { key: 'producto', label: 'Ganancia por producto' },
           { key: 'costos', label: 'Costos de productos' },
-          { key: 'categorias', label: 'Por categoría' },
-            { key: 'clientes', label: 'Por cliente' },
-            { key: 'cashflow', label: 'Flujo de caja' },
-            { key: 'presupuestos', label: 'Presupuestos' },
+          { key: 'categorias', label: 'Por categoria' },
+          { key: 'clientes', label: 'Por cliente' },
+          { key: 'cashflow', label: 'Flujo de caja' },
+          { key: 'presupuestos', label: 'Presupuestos' },
         ].map((t) => (
           <button
             key={t.key}
             type="button"
-            className={`px-3 py-2 text-sm border-b-2 -mb-px ${
-              tab === (t.key as TabKey)
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
+            className={`finance-tab ${tab === (t.key as TabKey) ? 'active' : ''}`}
             onClick={() => setTab(t.key as TabKey)}
           >
             {t.label}
@@ -908,14 +926,22 @@ export default function Finanzas() {
       </div>
 
       {tab === 'neta' && (
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-sm text-slate-500 mb-2">Ganancias brutas vs. netas</div>
-          <div className="h-72">
+        <div className="app-card finance-card p-4">
+          <div className="text-sm text-slate-300 mb-2">Ganancias brutas vs. netas</div>
+          <div className="h-72 finance-shimmer">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartGananciaNeta}>
                 <XAxis dataKey="fecha" stroke="#94a3b8" />
                 <YAxis stroke="#94a3b8" />
-                <Tooltip />
+                <Tooltip
+                  wrapperStyle={{ outline: 'none' }}
+                  contentStyle={{
+                    background: 'rgba(2,6,23,0.92)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 8,
+                    color: '#e2e8f0',
+                  }}
+                />
                 <Area
                   type="monotone"
                   dataKey="ventas"
@@ -941,9 +967,9 @@ export default function Finanzas() {
       {tab === 'bruta' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-xs text-slate-500 mb-1">Ventas netas</div>
-              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">
+            <div className="app-card finance-card p-4">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Ventas netas</div>
+              <div className="text-2xl font-semibold font-data text-slate-100">
                 ${brutaResumen.totalVentas.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </div>
               <div className="text-xs text-slate-500 mt-2">
@@ -951,21 +977,23 @@ export default function Finanzas() {
                 Impuestos: {brutaResumen.totalImpuestos.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </div>
             </div>
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-xs text-slate-500 mb-1">Costo de productos vendidos</div>
-              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">
+            <div className="app-card finance-card p-4">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Costo productos vendidos</div>
+              <div className="text-2xl font-semibold font-data text-cyan-200">
                 ${brutaResumen.totalCostoProductos.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </div>
+              <div className="text-xs text-slate-500 mt-2">Costo total del periodo</div>
             </div>
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-xs text-slate-500 mb-1">Ganancia bruta</div>
-              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">
+            <div className="app-card finance-card p-4">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Ganancia bruta</div>
+              <div className="text-2xl font-semibold font-data text-emerald-200">
                 ${brutaResumen.gananciaBruta.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </div>
+              <div className="text-xs text-slate-500 mt-2">Ventas menos costos</div>
             </div>
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-xs text-slate-500 mb-1">Margen bruto</div>
-              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">
+            <div className="app-card finance-card p-4">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Margen bruto</div>
+              <div className="text-2xl font-semibold font-data text-fuchsia-200">
                 {margenBruto.toFixed(1)}%
               </div>
               <div className="text-xs text-slate-500 mt-2">Ganancia bruta / ventas</div>
@@ -973,14 +1001,23 @@ export default function Finanzas() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4 lg:col-span-2">
-              <div className="text-sm text-slate-500 mb-2">Ventas, costo y ganancia bruta</div>
-              <div className="h-72">
+            <div className="app-card finance-card p-4 lg:col-span-2">
+              <div className="text-sm text-slate-300 mb-2">Ventas, costo y ganancia bruta</div>
+              <div className="h-72 finance-shimmer">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartGananciaBruta}>
                     <XAxis dataKey="fecha" stroke="#94a3b8" />
                     <YAxis stroke="#94a3b8" />
-                    <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                    <Tooltip
+                      formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      wrapperStyle={{ outline: 'none' }}
+                      contentStyle={{
+                        background: 'rgba(2,6,23,0.92)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 8,
+                        color: '#e2e8f0',
+                      }}
+                    />
                     <Area
                       type="monotone"
                       dataKey="ventas"
@@ -1010,9 +1047,9 @@ export default function Finanzas() {
               </div>
             </div>
 
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-sm text-slate-500 mb-2">Estructura de ganancia bruta</div>
-              <div className="h-72">
+            <div className="app-card finance-card p-4">
+              <div className="text-sm text-slate-300 mb-2">Estructura de ganancia bruta</div>
+              <div className="h-72 finance-shimmer">
                 {pieVentasCosto.length === 0 ? (
                   <div className="text-sm text-slate-500">Sin datos para el periodo.</div>
                 ) : (
@@ -1030,7 +1067,16 @@ export default function Finanzas() {
                           <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                      <Tooltip
+                        formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        wrapperStyle={{ outline: 'none' }}
+                        contentStyle={{
+                          background: 'rgba(2,6,23,0.92)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: 8,
+                          color: '#e2e8f0',
+                        }}
+                      />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
@@ -1040,9 +1086,9 @@ export default function Finanzas() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-sm text-slate-500 mb-2">Ganancia bruta por categoria</div>
-              <div className="h-72">
+            <div className="app-card finance-card p-4">
+              <div className="text-sm text-slate-300 mb-2">Ganancia bruta por categoria</div>
+              <div className="h-72 finance-shimmer">
                 {pieCategoriasGanancia.length === 0 ? (
                   <div className="text-sm text-slate-500">Sin datos para el periodo.</div>
                 ) : (
@@ -1060,16 +1106,25 @@ export default function Finanzas() {
                           <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                      <Tooltip
+                        formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        wrapperStyle={{ outline: 'none' }}
+                        contentStyle={{
+                          background: 'rgba(2,6,23,0.92)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: 8,
+                          color: '#e2e8f0',
+                        }}
+                      />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
                 )}
               </div>
             </div>
-            <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-              <div className="text-sm text-slate-500 mb-2">Ganancia bruta por producto</div>
-              <div className="h-72">
+            <div className="app-card finance-card p-4">
+              <div className="text-sm text-slate-300 mb-2">Ganancia bruta por producto</div>
+              <div className="h-72 finance-shimmer">
                 {pieProductosGanancia.length === 0 ? (
                   <div className="text-sm text-slate-500">Sin datos para el periodo.</div>
                 ) : (
@@ -1087,7 +1142,16 @@ export default function Finanzas() {
                           <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                      <Tooltip
+                        formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        wrapperStyle={{ outline: 'none' }}
+                        contentStyle={{
+                          background: 'rgba(2,6,23,0.92)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: 8,
+                          color: '#e2e8f0',
+                        }}
+                      />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
@@ -1099,8 +1163,8 @@ export default function Finanzas() {
       )}
 
       {tab === 'costos' && (
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-sm text-slate-500 mb-2">Costos de productos por artículo</div>
+        <div className="app-card finance-card p-4">
+          <div className="text-sm text-slate-300 mb-2">Costos de productos por artículo</div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-slate-500">
@@ -1112,7 +1176,7 @@ export default function Finanzas() {
                   <th className="py-2 px-2">Moneda</th>
                 </tr>
               </thead>
-              <tbody className="text-slate-700 dark:text-slate-200">
+              <tbody className="text-slate-200">
                 {costosProductos.length === 0 && (
                   <tr>
                     <td colSpan={5} className="py-4 text-center text-slate-500">
@@ -1121,7 +1185,7 @@ export default function Finanzas() {
                   </tr>
                 )}
                 {costosProductos.map((r) => (
-                  <tr key={r.productoId} className="border-t border-slate-100 dark:border-slate-800">
+                  <tr key={r.productoId} className="border-t border-white/10 hover:bg-white/5">
                     <td className="py-2 px-2">{r.productoCodigo}</td>
                     <td className="py-2 px-2">{r.productoNombre}</td>
                     <td className="py-2 px-2 text-right">{r.cantidad}</td>
@@ -1138,8 +1202,8 @@ export default function Finanzas() {
       )}
 
       {tab === 'categorias' && (
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-sm text-slate-500 mb-2">Rentabilidad por categoría</div>
+        <div className="app-card finance-card p-4">
+          <div className="text-sm text-slate-300 mb-2">Rentabilidad por categoría</div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-slate-500">
@@ -1152,7 +1216,7 @@ export default function Finanzas() {
                   <th className="py-2 px-2 text-right">Margen %</th>
                 </tr>
               </thead>
-              <tbody className="text-slate-700 dark:text-slate-200">
+              <tbody className="text-slate-200">
                 {rentabilidadCategorias.length === 0 && (
                   <tr>
                     <td colSpan={6} className="py-4 text-center text-slate-500">
@@ -1161,7 +1225,7 @@ export default function Finanzas() {
                   </tr>
                 )}
                 {rentabilidadCategorias.map((c) => (
-                  <tr key={c.categoriaId ?? c.categoriaNombre} className="border-t border-slate-100 dark:border-slate-800">
+                  <tr key={c.categoriaId ?? c.categoriaNombre} className="border-t border-white/10 hover:bg-white/5">
                     <td className="py-2 px-2">{c.categoriaNombre}</td>
                     <td className="py-2 px-2 text-right">{c.unidadesVendidas}</td>
                     <td className="py-2 px-2 text-right">
@@ -1185,8 +1249,8 @@ export default function Finanzas() {
       )}
 
       {tab === 'clientes' && (
-          <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-sm text-slate-500 mb-2">Rentabilidad por cliente (ventas y deuda)</div>
+          <div className="app-card finance-card p-4">
+          <div className="text-sm text-slate-300 mb-2">Rentabilidad por cliente (ventas y deuda)</div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-slate-500">
@@ -1200,7 +1264,7 @@ export default function Finanzas() {
                   <th className="py-2 px-2 text-right">Deuda</th>
                 </tr>
               </thead>
-              <tbody className="text-slate-700 dark:text-slate-200">
+              <tbody className="text-slate-200">
                 {rentabilidadClientes.length === 0 && (
                   <tr>
                     <td colSpan={7} className="py-4 text-center text-slate-500">
@@ -1209,7 +1273,7 @@ export default function Finanzas() {
                   </tr>
                 )}
                 {rentabilidadClientes.map((c) => (
-                  <tr key={c.clienteId} className="border-t border-slate-100 dark:border-slate-800">
+                  <tr key={c.clienteId} className="border-t border-white/10 hover:bg-white/5">
                     <td className="py-2 px-2">
                       {c.clienteNombre}
                       {c.clienteApellido ? ` ${c.clienteApellido}` : ''}
@@ -1239,38 +1303,46 @@ export default function Finanzas() {
         )}
 
         {tab === 'cashflow' && (
-          <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4 space-y-4">
+          <div className="app-card finance-card p-4 space-y-4">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
               <div>
-                <div className="text-sm text-slate-500 mb-1">Flujo de caja diario</div>
+                <div className="text-sm text-slate-300 mb-1">Flujo de caja diario</div>
                 <div className="text-xs text-slate-500">
                   Saldo inicial:{' '}
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                  <span className="font-medium text-slate-200 dark:text-slate-200">
                     {saldoInicial.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                   {' · '}Saldo mГ­nimo:{' '}
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                  <span className="font-medium text-slate-200 dark:text-slate-200">
                     {saldoMinimo.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                   {' · '}Saldo mГЎximo:{' '}
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                  <span className="font-medium text-slate-200 dark:text-slate-200">
                     {saldoMaximo.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                 </div>
                 <div className="text-xs text-slate-500">
                   DГ­as por debajo del umbral ({umbralMinimo.toLocaleString(undefined, { maximumFractionDigits: 0 })}):{' '}
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                  <span className="font-medium text-slate-200 dark:text-slate-200">
                     {diasPorDebajoUmbral}
                   </span>
                 </div>
               </div>
             </div>
-            <div className="h-72">
+            <div className="h-72 finance-shimmer">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartCashflow}>
                   <XAxis dataKey="fecha" stroke="#94a3b8" />
                   <YAxis stroke="#94a3b8" />
-                  <Tooltip />
+                  <Tooltip
+                  wrapperStyle={{ outline: 'none' }}
+                  contentStyle={{
+                    background: 'rgba(2,6,23,0.92)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 8,
+                    color: '#e2e8f0',
+                  }}
+                />
                   <Area
                     type="monotone"
                     dataKey="entradas"
@@ -1302,17 +1374,17 @@ export default function Finanzas() {
         )}
 
         {tab === 'presupuestos' && (
-          <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4 space-y-4">
+          <div className="app-card finance-card p-4 space-y-4">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
               <div>
-                <div className="text-sm text-slate-500 mb-1">Presupuesto vs real por categoria</div>
+                <div className="text-sm text-slate-300 mb-1">Presupuesto vs real por categoria</div>
                 <div className="text-xs text-slate-500">
                   Total presupuesto:{' '}
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                  <span className="font-medium text-slate-200 dark:text-slate-200">
                     {totalPresupuestoMes.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                   {' - '}Total real:{' '}
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                  <span className="font-medium text-slate-200 dark:text-slate-200">
                     {totalRealMes.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                 </div>
@@ -1364,7 +1436,7 @@ export default function Finanzas() {
                 </ResponsiveContainer>
               </div>
 
-              <div className="rounded-lg border border-slate-200/70 dark:border-slate-800 p-3 space-y-4">
+              <div className="app-panel p-3 space-y-4">
                 <div>
                   <div className="text-xs text-slate-500 mb-1">Ventas</div>
                   <div className="h-36">
@@ -1436,7 +1508,7 @@ export default function Finanzas() {
                       <th className="py-2 px-2 text-right">Diferencia</th>
                     </tr>
                   </thead>
-                  <tbody className="text-slate-700 dark:text-slate-200">
+                  <tbody className="text-slate-200">
                     {presupuestoVsRealRows.length === 0 && (
                       <tr>
                         <td colSpan={5} className="py-4 text-center text-slate-500">
@@ -1445,7 +1517,7 @@ export default function Finanzas() {
                       </tr>
                     )}
                     {presupuestoVsRealRows.map((r, idx) => (
-                      <tr key={`${r.tipo}-${r.categoria}-${idx}`} className="border-t border-slate-100 dark:border-slate-800">
+                      <tr key={`${r.tipo}-${r.categoria}-${idx}`} className="border-t border-white/10 hover:bg-white/5">
                         <td className="py-2 px-2 capitalize">{r.tipo}</td>
                         <td className="py-2 px-2">{r.categoria}</td>
                         <td className="py-2 px-2 text-right">
@@ -1464,8 +1536,8 @@ export default function Finanzas() {
               </div>
 
               <div className="space-y-4">
-                <div className="rounded-lg border border-slate-200/70 dark:border-slate-800 p-3">
-                  <div className="text-sm text-slate-500 mb-2">
+                <div className="app-panel p-3">
+                  <div className="text-sm text-slate-300 mb-2">
                     {presupuestoEditando ? 'Editar presupuesto' : 'Nuevo presupuesto'}
                   </div>
                   <form className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end" onSubmit={handleGuardarPresupuesto}>
@@ -1527,8 +1599,8 @@ export default function Finanzas() {
                   )}
                 </div>
 
-                <div className="rounded-lg border border-slate-200/70 dark:border-slate-800 p-3">
-                  <div className="text-sm text-slate-500 mb-2">Presupuestos del mes</div>
+                <div className="app-panel p-3">
+                  <div className="text-sm text-slate-300 mb-2">Presupuestos del mes</div>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-xs md:text-sm">
                       <thead className="text-left text-slate-500">
@@ -1539,7 +1611,7 @@ export default function Finanzas() {
                           <th className="py-2 px-2 text-right">Acciones</th>
                         </tr>
                       </thead>
-                      <tbody className="text-slate-700 dark:text-slate-200">
+                      <tbody className="text-slate-200">
                         {presupuestosMes.length === 0 && (
                           <tr>
                             <td colSpan={4} className="py-4 text-center text-slate-500">
@@ -1548,7 +1620,7 @@ export default function Finanzas() {
                           </tr>
                         )}
                         {presupuestosMes.map((p) => (
-                          <tr key={p.id ?? `${p.tipo}-${p.categoria}`} className="border-t border-slate-100 dark:border-slate-800">
+                          <tr key={p.id ?? `${p.tipo}-${p.categoria}`} className="border-t border-white/10 hover:bg-white/5">
                             <td className="py-2 px-2 capitalize">{p.tipo}</td>
                             <td className="py-2 px-2">{p.categoria}</td>
                             <td className="py-2 px-2 text-right">
@@ -1582,9 +1654,9 @@ export default function Finanzas() {
         )}
 
         {tab === 'producto' && (
-        <div className="rounded-xl bg-white dark:bg-slate-900 shadow-md p-4">
-          <div className="text-sm text-slate-500 mb-2">Top productos por ganancia bruta</div>
-          <div className="h-72 mb-4">
+        <div className="app-card finance-card p-4">
+          <div className="text-sm text-slate-300 mb-2">Top productos por ganancia bruta</div>
+          <div className="h-72 mb-4 finance-shimmer">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={productosRentables.map((p) => ({
@@ -1595,7 +1667,15 @@ export default function Finanzas() {
               >
                 <XAxis dataKey="nombre" hide />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  wrapperStyle={{ outline: 'none' }}
+                  contentStyle={{
+                    background: 'rgba(2,6,23,0.92)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 8,
+                    color: '#e2e8f0',
+                  }}
+                />
                 <Bar dataKey="ganancia" fill="#22c55e" />
               </BarChart>
             </ResponsiveContainer>
@@ -1613,7 +1693,7 @@ export default function Finanzas() {
                   <th className="py-2 px-2 text-right">Margen %</th>
                 </tr>
               </thead>
-              <tbody className="text-slate-700 dark:text-slate-200">
+              <tbody className="text-slate-200">
                 {productosRentables.length === 0 && (
                   <tr>
                     <td colSpan={7} className="py-4 text-center text-slate-500">
@@ -1622,21 +1702,27 @@ export default function Finanzas() {
                   </tr>
                 )}
                 {productosRentables.map((p) => (
-                  <tr key={p.productoId} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="py-2 px-2">{p.productoCodigo}</td>
+                  <tr key={p.productoId} className="border-t border-white/10 hover:bg-white/5">
+                    <td className="py-2 px-2 font-data text-cyan-200">{p.productoCodigo}</td>
                     <td className="py-2 px-2">{p.productoNombre}</td>
-                    <td className="py-2 px-2 text-right">{p.unidadesVendidas}</td>
-                    <td className="py-2 px-2 text-right">
+                    <td className="py-2 px-2 text-right font-data">{p.unidadesVendidas}</td>
+                    <td className="py-2 px-2 text-right font-data">
                       {p.ingresos.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </td>
-                    <td className="py-2 px-2 text-right">
+                    <td className="py-2 px-2 text-right font-data">
                       {p.costoTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </td>
-                    <td className="py-2 px-2 text-right">
+                    <td className="py-2 px-2 text-right font-data">
                       {p.gananciaBruta.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </td>
                     <td className="py-2 px-2 text-right">
-                      {p.margenPorcentaje != null ? `${p.margenPorcentaje.toFixed(1)}%` : '-'}
+                      {p.margenPorcentaje != null ? (
+                        <span className={`finance-badge ${p.margenPorcentaje >= 40 ? 'high' : p.margenPorcentaje >= 20 ? 'mid' : 'low'}`}>
+                          {p.margenPorcentaje.toFixed(1)}%
+                        </span>
+                      ) : (
+                        '-'
+                      )}
                     </td>
                   </tr>
                 ))}

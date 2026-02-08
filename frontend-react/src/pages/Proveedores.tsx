@@ -145,16 +145,14 @@ export default function Proveedores() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
-        Proveedores
-      </h2>
+    <div className="space-y-6">
+      <h2 className="app-title">Proveedores</h2>
 
       {error && <Alert kind="error" message={error} />}
       {success && <Alert kind="info" message={success} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 p-4 space-y-3">
+        <div className="lg:col-span-2 app-card p-4 space-y-3">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
             <div className="text-sm font-medium text-slate-200">Listado</div>
             <div className="flex gap-2">
@@ -271,7 +269,7 @@ export default function Proveedores() {
           )}
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 p-4 space-y-3">
+        <div className="app-card p-4 space-y-3">
           <div className="text-sm font-medium text-slate-200">
             {isEditing ? 'Editar proveedor' : 'Nuevo proveedor'}
           </div>

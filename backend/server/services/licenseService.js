@@ -353,6 +353,16 @@ async function isDemoExpired() {
   return Boolean(demo.expired);
 }
 
+async function getSupportInfo() {
+  const installId = await getOrCreateInstallId(null);
+  const demo = await getDemoInfo({ ensure: false });
+  return {
+    install_id: installId,
+    demo_expired: Boolean(demo.expired),
+    demo_expires_at: demo.expires_at || null,
+  };
+}
+
 module.exports = {
   FEATURE_USUARIOS,
   getOrCreateInstallId,
@@ -363,4 +373,5 @@ module.exports = {
   ensureDemoStart,
   getDemoInfo,
   isDemoExpired,
+  getSupportInfo,
 };

@@ -700,13 +700,11 @@ export default function Informes() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-100">Informes</h2>
-          <p className="text-sm text-slate-400">
-            Reportes ejecutivos con filtros y descargas.
-          </p>
+          <div className="app-title">Informes</div>
+          <div className="app-subtitle">Reportes ejecutivos con filtros y descargas</div>
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <select
@@ -776,15 +774,15 @@ export default function Informes() {
       {excelError && <Alert kind="error" message={excelError} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 p-4">
+        <div className="app-card p-4">
           <div className="text-xs text-slate-400">Total ventas</div>
           <div className="text-xl text-slate-100 font-semibold">${totals.ventas.toFixed(0)}</div>
         </div>
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 p-4">
+        <div className="app-card p-4">
           <div className="text-xs text-slate-400">Total gastos</div>
           <div className="text-xl text-slate-100 font-semibold">${totals.gastos.toFixed(0)}</div>
         </div>
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 p-4">
+        <div className="app-card p-4">
           <div className="text-xs text-slate-400">Ganancia neta</div>
           <div className="text-xl text-slate-100 font-semibold">${totals.neto.toFixed(0)}</div>
         </div>

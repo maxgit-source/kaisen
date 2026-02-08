@@ -425,12 +425,10 @@ export default function Productos() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
-        Productos
-      </h2>
-      <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4 space-y-4">
-        <div className="space-y-2 border border-white/10 rounded-2xl p-3 bg-white/5">
+    <div className="space-y-6">
+      <h2 className="app-title">Productos</h2>
+      <div className="app-card p-4 space-y-4">
+        <div className="app-panel p-3 space-y-2">
           <div className="text-sm font-semibold text-slate-200">Importar productos desde Excel</div>
           <div className="text-xs text-slate-400">
             Columnas sugeridas: nombre, categoria, precio o costo_pesos, stock, codigo (opcional), image_url (opcional).
@@ -464,7 +462,7 @@ export default function Productos() {
           </div>
           {importResult?.preview?.length ? (
             <div className="text-xs text-slate-300">
-              Vista previa (primeras filas vÃ¡lidas):
+              Vista previa (primeras filas validas):
               <div className="overflow-x-auto mt-2">
                 <table className="min-w-full text-xs">
                   <thead className="text-left text-slate-400">
@@ -583,7 +581,7 @@ export default function Productos() {
               setForm((prev) => ({ ...prev, precio_modo: e.target.value === 'manual' ? 'manual' : 'auto' }))
             }
           >
-            <option value="auto">Precios automÃ¡ticos</option>
+            <option value="auto">Precios automaticos</option>
             <option value="manual">Precios manuales</option>
           </select>
           {form.precio_modo === 'manual' ? (

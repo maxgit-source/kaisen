@@ -429,12 +429,10 @@ export default function Compras() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
-        Compra de productos
-      </h2>
+    <div className="space-y-6">
+      <h2 className="app-title">Compra de productos</h2>
 
-      <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4 space-y-4">
+      <div className="app-card p-4 space-y-4">
         {!canManagePurchases && (
           <Alert
             kind="warning"
@@ -573,7 +571,7 @@ export default function Compras() {
               return (
                 <div
                   key={item.id}
-                  className="rounded-xl border border-white/10 bg-white/5 p-3"
+                  className="app-panel p-3"
                 >
                   <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
                     <select

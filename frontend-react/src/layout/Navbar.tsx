@@ -1,4 +1,4 @@
-import { Bell, Search, Sun, Moon, LogOut } from 'lucide-react';
+﻿import { Bell, Search, Sun, Moon, LogOut } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
@@ -40,39 +40,48 @@ export default function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => vo
     if (licenseStatus.license_type === 'demo') {
       const total = licenseStatus.demo_days_total != null ? `${licenseStatus.demo_days_total} dias` : 'demo';
       const left = demoCountdown || (licenseStatus.demo_days_left != null ? `${licenseStatus.demo_days_left}d` : null);
-      return left ? `Licencia: Demo (${total}) · Restan ${left}` : `Licencia: Demo (${total})`;
+      return left ? `Licencia: Demo (${total}) - Restan ${left}` : `Licencia: Demo (${total})`;
     }
     return 'Licencia: Activa';
   })();
 
+  const licenseActive = Boolean(licenseStatus?.licensed);
+  const licenseBadge = licenseActive ? 'Licencia activa' : 'Licencia inactiva';
+
   return (
-    <header className="h-16 bg-white/5 backdrop-blur-md border-b border-white/10 px-6 flex items-center justify-between text-slate-200">
-      <div className="flex items-center gap-3">
-        <button onClick={onToggleSidebar} className="rounded-md px-3 py-2 bg-white/10 hover:bg-white/15 text-slate-100 text-sm">Menú</button>
-        <div className="text-sm text-slate-400">Inicio / Dashboard</div>
+    <header className="h-[72px] bg-black/40 backdrop-blur-xl border-b border-white/10 px-6 flex items-center justify-between text-slate-200">
+      <div className="flex items-center gap-4">
+        <button
+          onClick={onToggleSidebar}
+          className="rounded-xl px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-100 text-sm border border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+        >
+          Menu
+        </button>
+        <div>
+          <div className="text-lg font-semibold text-white">Dashboard</div>
+          <div className="text-xs text-slate-400">Inicio / Dashboard</div>
+        </div>
       </div>
       <div className="flex items-center gap-2">
-        <div className="hidden md:flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-slate-300">
-          {licenseLabel}
+        <div className="hidden lg:flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-200">
+          <span className={`h-2 w-2 rounded-full ${licenseActive ? 'bg-emerald-400 animate-[loginPulse_2s_ease-in-out_infinite]' : 'bg-rose-400'}`} />
+          <span>{licenseLabel || licenseBadge}</span>
         </div>
-        <div className="hidden sm:flex items-center gap-2 rounded-md bg-white/10 px-3 py-2 text-sm text-slate-200">
+        <div className="hidden sm:flex items-center gap-2 rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-sm text-slate-200">
           <Search size={16} />
-          <input placeholder="Buscar..." className="bg-transparent outline-none w-48" />
+          <input placeholder="Buscar..." className="bg-transparent outline-none w-56 text-sm" />
         </div>
-        <button className="p-2 rounded-md hover:bg-white/10 text-slate-200">
+        <button className="p-2 rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40">
           <Bell size={18} />
         </button>
-        <button onClick={toggle} className="p-2 rounded-md hover:bg-white/10 text-slate-200" title={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}>
+        <button onClick={toggle} className="p-2 rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40" title={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}>
           {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
         </button>
-        <button onClick={logout} className="p-2 rounded-md hover:bg-white/10 text-slate-200" title="Cerrar sesión">
+        <button onClick={logout} className="p-2 rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40" title="Cerrar sesion">
           <LogOut size={18} />
         </button>
       </div>
     </header>
   );
 }
-
-
-
 
