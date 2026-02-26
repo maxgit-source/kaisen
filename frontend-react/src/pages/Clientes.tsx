@@ -3,6 +3,8 @@ import { Search } from 'lucide-react';
 import { Api } from '../lib/api';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
+import { useMediaQuery } from '../lib/useMediaQuery';
+import { trackMobileEvent } from '../lib/mobileTelemetry';
 
 type Cliente = {
   id: number;
@@ -11,6 +13,7 @@ type Cliente = {
   email?: string | null;
   telefono?: string | null;
   direccion?: string | null;
+  entre_calles?: string | null;
   cuit_cuil?: string | null;
   tipo_doc?: string | null;
   nro_doc?: string | null;
@@ -114,7 +117,65 @@ type ClienteAcceso = {
   last_login_at?: string | null;
 };
 
+type RiesgoMora = {
+  cliente_id: number;
+  score: number;
+  bucket: 'low' | 'medium' | 'high' | 'critical';
+  deuda_pendiente?: number;
+  deuda_mas_90?: number;
+  dias_promedio_atraso?: number;
+  factores?: {
+    deuda_pendiente?: number;
+    deuda_mas_90?: number;
+    dias_promedio_atraso?: number;
+    promesas_incumplidas?: number;
+    promesas_totales?: number;
+  };
+};
+
+type PromesaCobranza = {
+  id: number;
+  cliente_id: number;
+  monto_prometido: number;
+  fecha_promesa: string;
+  estado: 'pendiente' | 'cumplida' | 'incumplida' | 'cancelada';
+  canal_preferido: 'whatsapp' | 'email' | 'telefono' | 'manual';
+  notas?: string | null;
+};
+
+type RecordatorioCobranza = {
+  id: number;
+  cliente_id: number;
+  canal: 'whatsapp' | 'email' | 'manual';
+  destino?: string | null;
+  template_code: string;
+  scheduled_at: string;
+  status: 'pending' | 'sent' | 'failed' | 'cancelled';
+};
+
+function riesgoLabel(bucket: RiesgoMora['bucket']) {
+  if (bucket === 'critical') return 'Critica';
+  if (bucket === 'high') return 'Alta';
+  if (bucket === 'medium') return 'Media';
+  return 'Baja';
+}
+
+function riesgoClass(bucket: RiesgoMora['bucket']) {
+  if (bucket === 'critical') return 'bg-rose-500/20 border-rose-500/40 text-rose-200';
+  if (bucket === 'high') return 'bg-orange-500/20 border-orange-500/40 text-orange-200';
+  if (bucket === 'medium') return 'bg-amber-500/20 border-amber-500/40 text-amber-200';
+  return 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200';
+}
+
+function recordatorioStatusLabel(status: RecordatorioCobranza['status']) {
+  if (status === 'sent') return 'Enviado';
+  if (status === 'failed') return 'Fallido';
+  if (status === 'cancelled') return 'Cancelado';
+  return 'Pendiente';
+}
+
 export default function Clientes() {
+  const isMobile = useMediaQuery('(max-width: 767px)');
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [deudas, setDeudas] = useState<Record<number, number>>({});
   const [deudaUmbralRojo, setDeudaUmbralRojo] = useState<number>(1000000);
@@ -132,6 +193,25 @@ export default function Clientes() {
   const [clienteAcceso, setClienteAcceso] = useState<ClienteAcceso | null>(null);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [accessSaving, setAccessSaving] = useState(false);
+  const [riesgoMora, setRiesgoMora] = useState<RiesgoMora | null>(null);
+  const [promesasCobranza, setPromesasCobranza] = useState<PromesaCobranza[]>([]);
+  const [recordatoriosCobranza, setRecordatoriosCobranza] = useState<RecordatorioCobranza[]>([]);
+  const [cobranzaLoading, setCobranzaLoading] = useState(false);
+  const [cobranzaError, setCobranzaError] = useState<string | null>(null);
+  const [promesaForm, setPromesaForm] = useState({
+    monto: '',
+    fecha: new Date().toISOString().slice(0, 10),
+    canal: 'whatsapp' as 'whatsapp' | 'email' | 'telefono' | 'manual',
+    notas: '',
+  });
+  const [promesaSaving, setPromesaSaving] = useState(false);
+  const [recordatorioForm, setRecordatorioForm] = useState({
+    canal: 'whatsapp' as 'whatsapp' | 'email' | 'manual',
+    destino: '',
+    template_code: 'manual_followup',
+    mensaje: '',
+  });
+  const [recordatorioSaving, setRecordatorioSaving] = useState(false);
   const [deudasIniciales, setDeudasIniciales] = useState<DeudaInicial[]>([]);
   const [pagosDeudaInicial, setPagosDeudaInicial] = useState<DeudaInicialPago[]>([]);
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([]);
@@ -164,6 +244,7 @@ export default function Clientes() {
     email: '',
     telefono: '',
     direccion: '',
+    entre_calles: '',
     cuit_cuil: '',
     tipo_doc: '',
     nro_doc: '',
@@ -217,6 +298,7 @@ export default function Clientes() {
   }
 
   async function loadClientes(query: string) {
+    const startedAt = Date.now();
     setLoading(true);
     setError(null);
     try {
@@ -224,11 +306,26 @@ export default function Clientes() {
       const clis = await Api.clientes({
         q: qValue ? qValue : undefined,
         limit: CLIENTES_LIMIT,
+        view: isMobile ? 'mobile' : undefined,
       });
       setClientes(clis as Cliente[]);
+      if (isMobile) {
+        trackMobileEvent('clientes_load_success', {
+          total: Array.isArray(clis) ? clis.length : 0,
+          q: qValue || '',
+          duration_ms: Date.now() - startedAt,
+        });
+      }
     } catch (e: any) {
       setError(e?.message || 'No se pudieron cargar los clientes');
       setClientes([]);
+      if (isMobile) {
+        trackMobileEvent('clientes_load_error', {
+          q: query.trim() || '',
+          message: e?.message || 'No se pudieron cargar los clientes',
+          duration_ms: Date.now() - startedAt,
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -240,7 +337,7 @@ export default function Clientes() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [isMobile]);
 
   useEffect(() => {
     let active = true;
@@ -276,6 +373,105 @@ export default function Clientes() {
     return () => window.clearTimeout(handle);
   }, [q]);
 
+  async function loadCobranzaCliente(clienteId: number) {
+    setCobranzaLoading(true);
+    setCobranzaError(null);
+    try {
+      const [riskRows, promises, reminders] = await Promise.all([
+        Api.ownerRiskRanking({ limit: 500, persist: false }).catch(() => []),
+        Api.ownerPromises({ cliente_id: clienteId, limit: 50 }).catch(() => []),
+        Api.ownerReminders({ cliente_id: clienteId, limit: 50 }).catch(() => []),
+      ]);
+      const risk = (riskRows as RiesgoMora[]).find(
+        (r) => Number(r.cliente_id) === Number(clienteId)
+      ) || null;
+      setRiesgoMora(risk);
+      setPromesasCobranza((promises || []) as PromesaCobranza[]);
+      setRecordatoriosCobranza((reminders || []) as RecordatorioCobranza[]);
+    } catch (e: any) {
+      setCobranzaError(e?.message || 'No se pudo cargar cobranzas inteligentes');
+      setRiesgoMora(null);
+      setPromesasCobranza([]);
+      setRecordatoriosCobranza([]);
+    } finally {
+      setCobranzaLoading(false);
+    }
+  }
+
+  async function crearPromesaCobranza() {
+    if (!selectedCliente || promesaSaving) return;
+    const monto = Number(promesaForm.monto.replace(',', '.'));
+    if (!Number.isFinite(monto) || monto <= 0) {
+      setCobranzaError('Monto de promesa invalido');
+      return;
+    }
+    if (!promesaForm.fecha) {
+      setCobranzaError('Fecha de promesa requerida');
+      return;
+    }
+    setPromesaSaving(true);
+    setCobranzaError(null);
+    try {
+      await Api.ownerCreatePromise({
+        cliente_id: selectedCliente.id,
+        monto_prometido: monto,
+        fecha_promesa: promesaForm.fecha,
+        canal_preferido: promesaForm.canal,
+        notas: promesaForm.notas || undefined,
+      });
+      setPromesaForm({
+        monto: '',
+        fecha: new Date().toISOString().slice(0, 10),
+        canal: 'whatsapp',
+        notas: '',
+      });
+      await loadCobranzaCliente(selectedCliente.id);
+    } catch (e: any) {
+      setCobranzaError(e?.message || 'No se pudo crear la promesa');
+    } finally {
+      setPromesaSaving(false);
+    }
+  }
+
+  async function actualizarEstadoPromesa(id: number, estado: PromesaCobranza['estado']) {
+    if (!selectedCliente) return;
+    try {
+      await Api.ownerUpdatePromiseStatus(id, { estado });
+      await loadCobranzaCliente(selectedCliente.id);
+    } catch (e: any) {
+      setCobranzaError(e?.message || 'No se pudo actualizar estado de promesa');
+    }
+  }
+
+  async function crearRecordatorioManual() {
+    if (!selectedCliente || recordatorioSaving) return;
+    setRecordatorioSaving(true);
+    setCobranzaError(null);
+    try {
+      const payload = {
+        mensaje: recordatorioForm.mensaje || 'Seguimiento de cobranza',
+      };
+      await Api.ownerCreateReminder({
+        cliente_id: selectedCliente.id,
+        canal: recordatorioForm.canal,
+        destino: recordatorioForm.destino || undefined,
+        template_code: recordatorioForm.template_code || 'manual_followup',
+        payload,
+      });
+      setRecordatorioForm({
+        canal: 'whatsapp',
+        destino: '',
+        template_code: 'manual_followup',
+        mensaje: '',
+      });
+      await loadCobranzaCliente(selectedCliente.id);
+    } catch (e: any) {
+      setCobranzaError(e?.message || 'No se pudo crear recordatorio');
+    } finally {
+      setRecordatorioSaving(false);
+    }
+  }
+
   const resumenSeleccionado = useMemo(() => {
     if (!selectedCliente) {
       return {
@@ -305,7 +501,7 @@ export default function Clientes() {
     const deudaCorriente = Number(selectedCliente ? deudas[selectedCliente.id] || 0 : 0);
     const ticketPromedio = comprasCount ? totalComprado / comprasCount : 0;
 
-    // Frecuencia promedio entre compras (en días)
+    // Frecuencia promedio entre compras (en dÃ­as)
     let frecuenciaPromedioDias: number | null = null;
     if (comprasCount > 1) {
       const ordenadas = [...detalleVentas]
@@ -327,7 +523,7 @@ export default function Clientes() {
       }
     }
 
-    // Posición en ranking interno (si está en el top cargado)
+    // PosiciÃ³n en ranking interno (si estÃ¡ en el top cargado)
     const idx = ranking.findIndex((r) => r.cliente_id === selectedCliente.id);
     const rankingPosicion = idx >= 0 ? idx + 1 : null;
 
@@ -473,7 +669,7 @@ export default function Clientes() {
   async function eliminarCliente(cliente: Cliente) {
     if (
       !window.confirm(
-        `Eliminar cliente ${cliente.nombre}? Esta acción no se puede deshacer.`
+        `Eliminar cliente ${cliente.nombre}? Esta acciÃ³n no se puede deshacer.`
       )
     ) {
       return;
@@ -499,7 +695,11 @@ export default function Clientes() {
       setHistorialPagos([]);
       setHistorialError(null);
       const [ventas, opps, acts, deudasIni, pagosIni, acceso, historial] = await Promise.all([
-        Api.ventas({ cliente_id: cliente.id, limit: 200 }),
+        Api.ventas({
+          cliente_id: cliente.id,
+          limit: 200,
+          view: isMobile ? 'mobile' : undefined,
+        }),
         Api.oportunidades({ cliente_id: cliente.id, limit: 50 }),
         Api.actividades({ cliente_id: cliente.id, estado: 'pendiente', limit: 50 }),
         Api.clienteDeudasIniciales(cliente.id).catch(() => []),
@@ -514,6 +714,14 @@ export default function Clientes() {
       setPagosDeudaInicial((pagosIni || []) as DeudaInicialPago[]);
       setClienteAcceso((acceso || null) as ClienteAcceso | null);
       setHistorialPagos((historial || []) as HistorialPago[]);
+      if (isMobile) {
+        trackMobileEvent('cliente_detalle_opened', {
+          cliente_id: cliente.id,
+          ventas: Array.isArray(ventas) ? ventas.length : 0,
+          historial: Array.isArray(historial) ? historial.length : 0,
+        });
+      }
+      await loadCobranzaCliente(cliente.id);
     } catch (e: any) {
       setDetalleError(e?.message || 'No se pudo cargar el detalle del cliente');
       setDetalleVentas([]);
@@ -524,6 +732,10 @@ export default function Clientes() {
       setHistorialPagos([]);
       setHistorialError(null);
       setClienteAcceso(null);
+      setRiesgoMora(null);
+      setPromesasCobranza([]);
+      setRecordatoriosCobranza([]);
+      setCobranzaError(null);
     } finally {
       setDetalleLoading(false);
     }
@@ -673,6 +885,7 @@ export default function Clientes() {
         email: cliente.email || '',
         telefono: cliente.telefono || '',
         direccion: cliente.direccion || '',
+        entre_calles: cliente.entre_calles || '',
         cuit_cuil: cliente.cuit_cuil || '',
         tipo_doc: cliente.tipo_doc || '',
         nro_doc: cliente.nro_doc || '',
@@ -694,11 +907,11 @@ export default function Clientes() {
   async function completarDesdePadron() {
     setPadronError(null);
     if (!editingCliente) {
-      setPadronError('Guarda el cliente antes de consultar padrón.');
+      setPadronError('Guarda el cliente antes de consultar padrÃ³n.');
       return;
     }
     if (!form.cuit_cuil) {
-      setPadronError('Ingresa un CUIT/CUIL válido.');
+      setPadronError('Ingresa un CUIT/CUIL vÃ¡lido.');
       return;
     }
     setPadronLoading(true);
@@ -726,7 +939,7 @@ export default function Clientes() {
           padronOverwrite && data.apellido ? data.apellido : prev.apellido,
       }));
     } catch (e: any) {
-      setPadronError(e?.message || 'No se pudo consultar padrón');
+      setPadronError(e?.message || 'No se pudo consultar padrÃ³n');
     } finally {
       setPadronLoading(false);
     }
@@ -740,7 +953,7 @@ export default function Clientes() {
     );
     if (!asunto) return;
     const descripcion =
-      window.prompt('Descripción (opcional)', '') || undefined;
+      window.prompt('DescripciÃ³n (opcional)', '') || undefined;
     try {
       await Api.crearActividad({
         tipo: 'llamada',
@@ -759,7 +972,7 @@ export default function Clientes() {
     } catch (e: any) {
       // En esta vista usamos un fallback simple de alerta
       window.alert(
-        e?.message || 'No se pudo crear la actividad rápida'
+        e?.message || 'No se pudo crear la actividad rÃ¡pida'
       );
     }
   }
@@ -801,7 +1014,7 @@ export default function Clientes() {
             if (!editingCliente && deudaAnteriorForm.tiene) {
               const montoNum = Number(deudaAnteriorForm.monto.replace(',', '.'));
               if (!Number.isFinite(montoNum) || montoNum <= 0) {
-                setError('Ingresa un monto válido para la deuda anterior');
+                setError('Ingresa un monto vÃ¡lido para la deuda anterior');
                 return;
               }
             }
@@ -811,6 +1024,7 @@ export default function Clientes() {
               email: form.email || undefined,
               telefono: form.telefono || undefined,
               direccion: form.direccion || undefined,
+              entre_calles: form.entre_calles || undefined,
               cuit_cuil: form.cuit_cuil || undefined,
               tipo_doc: form.tipo_doc || undefined,
               nro_doc: form.nro_doc || undefined,
@@ -851,6 +1065,7 @@ export default function Clientes() {
                 email: '',
                 telefono: '',
                 direccion: '',
+                entre_calles: '',
                 cuit_cuil: '',
                 tipo_doc: '',
                 nro_doc: '',
@@ -911,7 +1126,7 @@ export default function Clientes() {
           />
           <input
             className="input-modern text-sm"
-            placeholder="Teléfono"
+            placeholder="Telefono"
             value={form.telefono}
             onChange={(e) =>
               setForm((prev) => ({ ...prev, telefono: e.target.value }))
@@ -919,13 +1134,20 @@ export default function Clientes() {
           />
           <input
             className="input-modern text-sm"
-            placeholder="Dirección"
+            placeholder="Direccion"
             value={form.direccion}
             onChange={(e) =>
               setForm((prev) => ({ ...prev, direccion: e.target.value }))
             }
           />
           <input
+            className="input-modern text-sm"
+            placeholder="Entre calles"
+            value={form.entre_calles}
+            onChange={(e) =>
+              setForm((prev) => ({ ...prev, entre_calles: e.target.value }))
+            }
+          />          <input
             className="input-modern text-sm"
             placeholder="CUIT/CUIL"
             value={form.cuit_cuil}
@@ -940,7 +1162,7 @@ export default function Clientes() {
               className="px-3 py-1.5 rounded bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/30 text-indigo-200 text-xs disabled:opacity-60 disabled:cursor-not-allowed"
               disabled={!editingCliente || padronLoading}
             >
-              {padronLoading ? 'Consultando padrón...' : 'Completar desde padrón'}
+              {padronLoading ? 'Consultando padrÃ³n...' : 'Completar desde padron'}
             </button>
             <label className="flex items-center gap-2 text-xs text-slate-300">
               <input
@@ -982,7 +1204,7 @@ export default function Clientes() {
                 setForm((prev) => ({ ...prev, condicion_iva: e.target.value }))
               }
             >
-              <option value="">Condición IVA</option>
+              <option value="">Condicion IVA</option>
               <option value="responsable_inscripto">Responsable inscripto</option>
               <option value="monotributo">Monotributo</option>
               <option value="consumidor_final">Consumidor final</option>
@@ -1015,7 +1237,7 @@ export default function Clientes() {
             />
             <input
               className="input-modern text-sm"
-              placeholder="Código postal"
+              placeholder="Codigo postal"
               value={form.codigo_postal}
               onChange={(e) =>
                 setForm((prev) => ({ ...prev, codigo_postal: e.target.value }))
@@ -1111,6 +1333,7 @@ export default function Clientes() {
                     email: '',
                     telefono: '',
                     direccion: '',
+                    entre_calles: '',
                     cuit_cuil: '',
                     tipo_doc: '',
                     nro_doc: '',
@@ -1161,6 +1384,86 @@ export default function Clientes() {
         <div className="overflow-x-auto">
           {loading ? (
             <div className="py-8 text-center text-slate-500">Cargando...</div>
+          ) : isMobile ? (
+            <div className="space-y-3">
+              {clientes.map((c) => {
+                const deuda = Number(deudas[c.id] || 0);
+                const deudaClass =
+                  deuda <= 0
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
+                    : deuda < deudaUmbralRojo
+                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-200'
+                      : 'bg-rose-500/20 border-rose-500/40 text-rose-200';
+                return (
+                  <article key={c.id} className="app-panel p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm text-slate-100 font-medium">
+                          {c.nombre} {c.apellido}
+                        </div>
+                        <div className="text-xs text-slate-400">{c.email || '-'}</div>
+                      </div>
+                      <span
+                        className={`inline-flex px-2 py-0.5 rounded-full text-[11px] border ${
+                          c.estado === 'activo'
+                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
+                            : 'bg-slate-500/20 border-slate-500/40 text-slate-200'
+                        }`}
+                      >
+                        {c.estado === 'activo' ? 'Activo' : 'Inactivo'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${deudaClass}`}>
+                        Deuda ${deuda.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="touch-target px-3 py-1.5 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200 text-xs"
+                        onClick={() => verDetalleCliente(c)}
+                      >
+                        Ver detalle
+                      </button>
+                      <button
+                        className="touch-target px-3 py-1.5 rounded bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs"
+                        onClick={() => startEditCliente(c)}
+                      >
+                        Editar
+                      </button>
+                      {c.estado === 'activo' ? (
+                        <button
+                          className="touch-target px-3 py-1.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 text-xs"
+                          onClick={() => cambiarEstado(c, 'inactivo')}
+                        >
+                          Desactivar
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            className="touch-target px-3 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs"
+                            onClick={() => cambiarEstado(c, 'activo')}
+                          >
+                            Activar
+                          </button>
+                          <button
+                            className="touch-target px-3 py-1.5 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 text-xs"
+                            onClick={() => eliminarCliente(c)}
+                          >
+                            Eliminar
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+              {!loading && !clientes.length && (
+                <div className="py-6 text-center text-slate-400 app-panel">
+                  {q ? 'Sin resultados para la busqueda' : 'Sin clientes registrados'}
+                </div>
+              )}
+            </div>
           ) : (
             <table className="min-w-full text-sm">
               <thead className="text-left text-slate-400">
@@ -1174,10 +1477,7 @@ export default function Clientes() {
               </thead>
               <tbody className="text-slate-200">
                 {clientes.map((c) => (
-                  <tr
-                    key={c.id}
-                    className="border-t border-white/10 hover:bg-white/5"
-                  >
+                  <tr key={c.id} className="border-t border-white/10 hover:bg-white/5">
                     <td className="py-2">
                       {c.nombre} {c.apellido}
                     </td>
@@ -1192,9 +1492,7 @@ export default function Clientes() {
                               ? 'bg-amber-500/20 border-amber-500/40 text-amber-200'
                               : 'bg-rose-500/20 border-rose-500/40 text-rose-200';
                         return (
-                          <span
-                            className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${deudaClass}`}
-                          >
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${deudaClass}`}>
                             ${deuda.toFixed(2)}
                           </span>
                         );
@@ -1268,7 +1566,7 @@ export default function Clientes() {
             <div>
               <h3 className="text-lg font-semibold text-slate-100">Detalle de cliente</h3>
               <p className="text-sm text-slate-400">
-                {selectedCliente.nombre} {selectedCliente.apellido || ''} ·{' '}
+                {selectedCliente.nombre} {selectedCliente.apellido || ''} Â·{' '}
                 {selectedCliente.email || '-'}
               </p>
             </div>
@@ -1293,12 +1591,28 @@ export default function Clientes() {
                   setShowHistorialModal(false);
                   setHistorialPagos([]);
                   setHistorialError(null);
+                  setRiesgoMora(null);
+                  setPromesasCobranza([]);
+                  setRecordatoriosCobranza([]);
+                  setCobranzaError(null);
                   setPagoDeudaForm({
                     fecha: new Date().toISOString().slice(0, 10),
                     venta_id: '',
                   });
                   setPagoMetodos([{ metodo_id: '', monto: '', moneda: '' }]);
                   setPagoDeudaError(null);
+                  setPromesaForm({
+                    monto: '',
+                    fecha: new Date().toISOString().slice(0, 10),
+                    canal: 'whatsapp',
+                    notas: '',
+                  });
+                  setRecordatorioForm({
+                    canal: 'whatsapp',
+                    destino: '',
+                    template_code: 'manual_followup',
+                    mensaje: '',
+                  });
                 }}
               >
                 Cerrar
@@ -1320,15 +1634,21 @@ export default function Clientes() {
                 <div className="space-y-1">
                   <div className="text-xs text-slate-400 uppercase">Datos</div>
                   <div>
-                    Teléfono:{' '}
+                    Telefono:{' '}
                     <span className="text-slate-200">
                       {selectedCliente.telefono || '-'}
                     </span>
                   </div>
                   <div>
-                    Dirección:{' '}
+                    Direccion:{' '}
                     <span className="text-slate-200">
                       {selectedCliente.direccion || '-'}
+                    </span>
+                  </div>
+                  <div>
+                    Entre calles:{' '}
+                    <span className="text-slate-200">
+                      {selectedCliente.entre_calles || '-'}
                     </span>
                   </div>
                   <div>
@@ -1395,7 +1715,7 @@ export default function Clientes() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <div className="text-xs text-slate-400 uppercase">Situación</div>
+                  <div className="text-xs text-slate-400 uppercase">SituaciÃ³n</div>
                   <div>
                     Deuda corriente:{' '}
                     <span
@@ -1411,7 +1731,7 @@ export default function Clientes() {
                     </span>
                   </div>
                   <div>
-                    Última compra:{' '}
+                    Ãšltima compra:{' '}
                     <span className="text-slate-200">
                       {resumenSeleccionado.ultimaCompra
                         ? resumenSeleccionado.ultimaCompra.toLocaleString()
@@ -1425,50 +1745,81 @@ export default function Clientes() {
                   <h4 className="text-sm font-semibold text-slate-200 mb-2">
                     Cuenta corriente
                   </h4>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-xs md:text-sm">
-                      <thead className="text-left text-slate-400">
-                        <tr>
-                          <th className="py-1 pr-2">Fecha</th>
-                          <th className="py-1 pr-2">Movimiento</th>
-                          <th className="py-1 pr-2">Detalle</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-slate-200">
-                        {historialCuenta.map((item) => {
-                          const montoTexto =
-                            typeof item.monto === 'number'
-                              ? item.monto.toFixed(2)
-                              : null;
-                          const movimiento =
-                            item.tipo === 'pago'
-                              ? `Pago $${montoTexto ?? '0.00'}`
-                              : item.tipo === 'compra'
-                                ? `Compro $${montoTexto ?? '0.00'}`
-                                : 'Se llevo';
-                          return (
-                          <tr
-                            key={item.id}
-                            className="border-t border-white/10 hover:bg-white/5"
-                          >
-                            <td className="py-1 pr-2">
+                  {isMobile ? (
+                    <div className="space-y-2">
+                      {historialCuenta.map((item) => {
+                        const montoTexto =
+                          typeof item.monto === 'number'
+                            ? item.monto.toFixed(2)
+                            : null;
+                        const movimiento =
+                          item.tipo === 'pago'
+                            ? `Pago $${montoTexto ?? '0.00'}`
+                            : item.tipo === 'compra'
+                              ? `Compro $${montoTexto ?? '0.00'}`
+                              : 'Se llevo';
+                        return (
+                          <article key={item.id} className="app-panel p-3 text-xs space-y-1">
+                            <div className="text-slate-100">{movimiento}</div>
+                            <div className="text-slate-400">
                               {item.fecha ? new Date(item.fecha).toLocaleDateString() : '-'}
-                            </td>
-                            <td className="py-1 pr-2">{movimiento}</td>
-                            <td className="py-1 pr-2">{item.detalle || '-'}</td>
-                          </tr>
-                          );
-                        })}
-                        {!historialCuenta.length && (
+                            </div>
+                            <div className="text-slate-300">{item.detalle || '-'}</div>
+                          </article>
+                        );
+                      })}
+                      {!historialCuenta.length && (
+                        <div className="app-panel p-3 text-xs text-slate-400">
+                          Sin movimientos registrados
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-xs md:text-sm">
+                        <thead className="text-left text-slate-400">
                           <tr>
-                            <td className="py-2 text-slate-400" colSpan={3}>
-                              Sin movimientos registrados
-                            </td>
+                            <th className="py-1 pr-2">Fecha</th>
+                            <th className="py-1 pr-2">Movimiento</th>
+                            <th className="py-1 pr-2">Detalle</th>
                           </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="text-slate-200">
+                          {historialCuenta.map((item) => {
+                            const montoTexto =
+                              typeof item.monto === 'number'
+                                ? item.monto.toFixed(2)
+                                : null;
+                            const movimiento =
+                              item.tipo === 'pago'
+                                ? `Pago $${montoTexto ?? '0.00'}`
+                                : item.tipo === 'compra'
+                                  ? `Compro $${montoTexto ?? '0.00'}`
+                                  : 'Se llevo';
+                            return (
+                            <tr
+                              key={item.id}
+                              className="border-t border-white/10 hover:bg-white/5"
+                            >
+                              <td className="py-1 pr-2">
+                                {item.fecha ? new Date(item.fecha).toLocaleDateString() : '-'}
+                              </td>
+                              <td className="py-1 pr-2">{movimiento}</td>
+                              <td className="py-1 pr-2">{item.detalle || '-'}</td>
+                            </tr>
+                            );
+                          })}
+                          {!historialCuenta.length && (
+                            <tr>
+                              <td className="py-2 text-slate-400" colSpan={3}>
+                                Sin movimientos registrados
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <h4 className="text-sm font-semibold text-slate-200 mb-2">
@@ -1633,13 +1984,13 @@ export default function Clientes() {
               <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4 text-sm">
                 <div className="space-y-2">
                   <h4 className="text-sm font-semibold text-slate-200">
-                    Métricas avanzadas
+                    Metricas avanzadas
                   </h4>
                   <div>
                     Frecuencia prom. entre compras:{' '}
                     <span className="text-slate-200">
                       {resumenSeleccionado.frecuenciaPromedioDias != null
-                        ? `${resumenSeleccionado.frecuenciaPromedioDias.toFixed(1)} días`
+                        ? `${resumenSeleccionado.frecuenciaPromedioDias.toFixed(1)} dÃ­as`
                         : '-'}
                     </span>
                   </div>
@@ -1672,7 +2023,7 @@ export default function Clientes() {
                       onClick={crearActividadRapida}
                       className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs"
                     >
-                      Nueva actividad rápida
+                      Nueva actividad rapida
                     </button>
                   </div>
                   <div className="mt-2">
@@ -1684,9 +2035,9 @@ export default function Clientes() {
                         <li key={o.id}>
                           <span className="font-medium">{o.titulo}</span>{' '}
                           <span className="text-slate-400">
-                            · {o.fase}
+                            Â· {o.fase}
                             {typeof o.valor_estimado === 'number'
-                              ? ` · $${o.valor_estimado.toFixed(0)}`
+                              ? ` Â· $${o.valor_estimado.toFixed(0)}`
                               : ''}
                           </span>
                         </li>
@@ -1707,9 +2058,9 @@ export default function Clientes() {
                           <span>- {a.asunto}</span>{' '}
                           <span className="text-slate-400">
                             {a.fecha_hora
-                              ? `· ${new Date(a.fecha_hora).toLocaleString()}`
+                              ? `Â· ${new Date(a.fecha_hora).toLocaleString()}`
                               : ''}{' '}
-                            · {a.estado}
+                            Â· {a.estado}
                           </span>
                         </li>
                       ))}
@@ -1720,14 +2071,301 @@ export default function Clientes() {
                   </div>
                 </div>
               </div>
+
+              <div className="mt-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-200">
+                    Cobranzas inteligentes
+                  </h4>
+                  <button
+                    type="button"
+                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/10 text-xs"
+                    onClick={() => loadCobranzaCliente(selectedCliente.id)}
+                    disabled={cobranzaLoading}
+                  >
+                    {cobranzaLoading ? 'Actualizando...' : 'Actualizar'}
+                  </button>
+                </div>
+
+                {cobranzaError && (
+                  <div className="text-xs text-rose-300">{cobranzaError}</div>
+                )}
+
+                {cobranzaLoading ? (
+                  <div className="text-sm text-slate-400">Cargando modulo de cobranzas...</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                      <div className="p-3 rounded-lg border border-white/10 bg-white/5">
+                        <div className="text-[11px] uppercase text-slate-400 mb-1">
+                          Riesgo mora
+                        </div>
+                        {riesgoMora ? (
+                          <div className="space-y-1">
+                            <div>
+                              <span
+                                className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${riesgoClass(
+                                  riesgoMora.bucket
+                                )}`}
+                              >
+                                {riesgoLabel(riesgoMora.bucket)}
+                              </span>
+                            </div>
+                            <div className="text-slate-200">
+                              Score: <span className="font-semibold">{riesgoMora.score}</span>/100
+                            </div>
+                            <div className="text-slate-300 text-xs">
+                              Deuda +90: ${Number(riesgoMora.deuda_mas_90 || 0).toFixed(2)}
+                            </div>
+                            <div className="text-slate-300 text-xs">
+                              Atraso promedio: {Number(riesgoMora.dias_promedio_atraso || 0).toFixed(0)} dias
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-slate-400">Sin score disponible</div>
+                        )}
+                      </div>
+
+                      <div className="p-3 rounded-lg border border-white/10 bg-white/5">
+                        <div className="text-[11px] uppercase text-slate-400 mb-1">
+                          Promesas
+                        </div>
+                        <div className="text-slate-200 text-lg font-semibold">
+                          {promesasCobranza.length}
+                        </div>
+                        <div className="text-xs text-slate-400">
+                          Pendientes:{' '}
+                          {promesasCobranza.filter((p) => p.estado === 'pendiente').length}
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-lg border border-white/10 bg-white/5">
+                        <div className="text-[11px] uppercase text-slate-400 mb-1">
+                          Recordatorios
+                        </div>
+                        <div className="text-slate-200 text-lg font-semibold">
+                          {recordatoriosCobranza.length}
+                        </div>
+                        <div className="text-xs text-slate-400">
+                          Pendientes:{' '}
+                          {recordatoriosCobranza.filter((r) => r.status === 'pending').length}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                      <div className="p-3 rounded-lg border border-white/10 bg-white/5 space-y-3">
+                        <div className="text-sm text-slate-200 font-medium">
+                          Promesas de pago
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                            placeholder="Monto"
+                            value={promesaForm.monto}
+                            onChange={(e) =>
+                              setPromesaForm((prev) => ({ ...prev, monto: e.target.value }))
+                            }
+                          />
+                          <input
+                            type="date"
+                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                            value={promesaForm.fecha}
+                            onChange={(e) =>
+                              setPromesaForm((prev) => ({ ...prev, fecha: e.target.value }))
+                            }
+                          />
+                          <select
+                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                            value={promesaForm.canal}
+                            onChange={(e) =>
+                              setPromesaForm((prev) => ({
+                                ...prev,
+                                canal: e.target.value as 'whatsapp' | 'email' | 'telefono' | 'manual',
+                              }))
+                            }
+                          >
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="email">Email</option>
+                            <option value="telefono">Telefono</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={crearPromesaCobranza}
+                            className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs disabled:opacity-60"
+                            disabled={promesaSaving}
+                          >
+                            {promesaSaving ? 'Guardando...' : 'Crear promesa'}
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                          placeholder="Notas (opcional)"
+                          value={promesaForm.notas}
+                          onChange={(e) =>
+                            setPromesaForm((prev) => ({ ...prev, notas: e.target.value }))
+                          }
+                        />
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-xs">
+                            <thead className="text-left text-slate-400">
+                              <tr>
+                                <th className="py-1 pr-2">Fecha</th>
+                                <th className="py-1 pr-2">Monto</th>
+                                <th className="py-1 pr-2">Canal</th>
+                                <th className="py-1 pr-2">Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody className="text-slate-200">
+                              {promesasCobranza.map((p) => (
+                                <tr key={p.id} className="border-t border-white/10">
+                                  <td className="py-1 pr-2">
+                                    {p.fecha_promesa
+                                      ? new Date(p.fecha_promesa).toLocaleDateString()
+                                      : '-'}
+                                  </td>
+                                  <td className="py-1 pr-2">${Number(p.monto_prometido || 0).toFixed(2)}</td>
+                                  <td className="py-1 pr-2">{p.canal_preferido}</td>
+                                  <td className="py-1 pr-2">
+                                    <select
+                                      className="bg-slate-800 border border-white/10 rounded px-1 py-0.5 text-xs"
+                                      value={p.estado}
+                                      onChange={(e) =>
+                                        actualizarEstadoPromesa(
+                                          p.id,
+                                          e.target.value as PromesaCobranza['estado']
+                                        )
+                                      }
+                                    >
+                                      <option value="pendiente">pendiente</option>
+                                      <option value="cumplida">cumplida</option>
+                                      <option value="incumplida">incumplida</option>
+                                      <option value="cancelada">cancelada</option>
+                                    </select>
+                                  </td>
+                                </tr>
+                              ))}
+                              {!promesasCobranza.length && (
+                                <tr>
+                                  <td colSpan={4} className="py-2 text-slate-400">
+                                    Sin promesas registradas
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-lg border border-white/10 bg-white/5 space-y-3">
+                        <div className="text-sm text-slate-200 font-medium">
+                          Recordatorios
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                          <select
+                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                            value={recordatorioForm.canal}
+                            onChange={(e) =>
+                              setRecordatorioForm((prev) => ({
+                                ...prev,
+                                canal: e.target.value as 'whatsapp' | 'email' | 'manual',
+                              }))
+                            }
+                          >
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="email">Email</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                          <input
+                            type="text"
+                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                            placeholder="Destino"
+                            value={recordatorioForm.destino}
+                            onChange={(e) =>
+                              setRecordatorioForm((prev) => ({ ...prev, destino: e.target.value }))
+                            }
+                          />
+                          <input
+                            type="text"
+                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                            placeholder="Template"
+                            value={recordatorioForm.template_code}
+                            onChange={(e) =>
+                              setRecordatorioForm((prev) => ({
+                                ...prev,
+                                template_code: e.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            onClick={crearRecordatorioManual}
+                            className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200 text-xs disabled:opacity-60"
+                            disabled={recordatorioSaving}
+                          >
+                            {recordatorioSaving ? 'Guardando...' : 'Crear recordatorio'}
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
+                          placeholder="Mensaje corto"
+                          value={recordatorioForm.mensaje}
+                          onChange={(e) =>
+                            setRecordatorioForm((prev) => ({ ...prev, mensaje: e.target.value }))
+                          }
+                        />
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-xs">
+                            <thead className="text-left text-slate-400">
+                              <tr>
+                                <th className="py-1 pr-2">Fecha</th>
+                                <th className="py-1 pr-2">Canal</th>
+                                <th className="py-1 pr-2">Destino</th>
+                                <th className="py-1 pr-2">Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody className="text-slate-200">
+                              {recordatoriosCobranza.map((r) => (
+                                <tr key={r.id} className="border-t border-white/10">
+                                  <td className="py-1 pr-2">
+                                    {r.scheduled_at
+                                      ? new Date(r.scheduled_at).toLocaleString()
+                                      : '-'}
+                                  </td>
+                                  <td className="py-1 pr-2">{r.canal}</td>
+                                  <td className="py-1 pr-2">{r.destino || '-'}</td>
+                                  <td className="py-1 pr-2">{recordatorioStatusLabel(r.status)}</td>
+                                </tr>
+                              ))}
+                              {!recordatoriosCobranza.length && (
+                                <tr>
+                                  <td colSpan={4} className="py-2 text-slate-400">
+                                    Sin recordatorios registrados
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>
       )}
 
       {showHistorialModal && selectedCliente && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70">
-          <div className="app-card w-full max-w-4xl p-4 space-y-4">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-2 sm:p-4">
+          <div className="app-card mobile-modal-card w-full max-w-4xl p-4 space-y-4">
             <div className="flex items-center justify-between mb-2">
               <div>
                 <div className="text-sm text-slate-400">Historial de pagos y entregas</div>
@@ -1750,6 +2388,67 @@ export default function Clientes() {
             )}
             {historialLoading ? (
               <div className="py-6 text-center text-slate-400">Cargando historial...</div>
+            ) : isMobile ? (
+              <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+                {historialPagos.map((h) => (
+                  <article key={`${h.tipo}-${h.id}`} className="app-panel p-3 text-xs space-y-1">
+                    <div className="text-slate-100">
+                      {h.tipo === 'pago_venta'
+                        ? 'Pago venta'
+                        : h.tipo === 'pago_cuenta'
+                          ? 'Pago cuenta corriente'
+                          : h.tipo === 'pago_deuda_inicial'
+                            ? 'Pago deuda'
+                            : 'Entrega'}
+                    </div>
+                    <div className="text-slate-400">
+                      {h.fecha ? new Date(h.fecha).toLocaleString() : '-'}
+                    </div>
+                    <div className="text-slate-300">
+                      {h.tipo === 'pago_venta'
+                        ? h.venta_id
+                          ? `Venta #${h.venta_id}`
+                          : '-'
+                        : h.tipo === 'pago_cuenta'
+                          ? 'Cuenta corriente'
+                          : h.tipo === 'entrega_venta'
+                            ? h.venta_id
+                              ? `Entrega venta #${h.venta_id}`
+                              : 'Entrega'
+                            : 'Pago deuda'}
+                    </div>
+                    <div className="text-slate-300">
+                      {h.detalle
+                        ? h.tipo === 'entrega_venta'
+                          ? `Se entrego ${h.detalle}`
+                          : h.detalle
+                        : '-'}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-slate-100">
+                        {h.monto != null ? `$${Number(h.monto || 0).toFixed(2)}` : '-'}
+                      </div>
+                      {h.tipo === 'entrega_venta' ? (
+                        <span className="text-slate-500">-</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 text-[11px]"
+                          onClick={() => eliminarPagoHistorial(h)}
+                          disabled={historialDeleting}
+                        >
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+                {!historialPagos.length && (
+                  <div className="app-panel p-3 text-xs text-slate-400">
+                    Sin movimientos registrados
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="overflow-x-auto text-xs md:text-sm max-h-[60vh]">
                 <table className="min-w-full">

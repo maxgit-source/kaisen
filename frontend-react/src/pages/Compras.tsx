@@ -4,10 +4,12 @@ import { Api } from '../lib/api';
 import Alert from '../components/Alert';
 import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
+import ProductPicker from '../components/ProductPicker';
 
 type Producto = {
   id: number;
   name: string;
+  codigo?: string | null;
   category_name?: string;
   stock_quantity: number;
   price: number;
@@ -158,6 +160,18 @@ export default function Compras() {
   }, [proveedorId, depositoId, itemsValid, moneda, fx, recepcionInmediata]);
 
   const canSubmitNow = formValid && canManagePurchases && !submitting;
+  const productOptions = useMemo(
+    () =>
+      productos.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category_name: p.category_name || null,
+        codigo: p.codigo || null,
+        stock_quantity: p.stock_quantity,
+        extra: `${p.category_name ? `${p.category_name} · ` : ''}Stock: ${p.stock_quantity}`,
+      })),
+    [productos],
+  );
 
   async function loadProductos() {
     setLoadingProductos(true);
@@ -168,6 +182,7 @@ export default function Compras() {
         (data || []).map((r: any) => ({
           id: r.id,
           name: r.name,
+          codigo: r.codigo ?? null,
           category_name: r.category_name,
           stock_quantity: Number(r.stock_quantity ?? 0),
           price: Number(r.price ?? 0),
@@ -574,27 +589,19 @@ export default function Compras() {
                   className="app-panel p-3"
                 >
                   <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
-                    <select
-                      className="input-modern text-sm md:col-span-5"
+                    <ProductPicker
+                      options={productOptions}
                       disabled={loadingProductos}
-                      value={item.producto_id}
-                      onChange={(e) =>
+                      value={item.producto_id === '' ? null : Number(item.producto_id)}
+                      onChange={(id) =>
                         updateItem(item.id, {
-                          producto_id: e.target.value
-                            ? Number(e.target.value)
-                            : '',
+                          producto_id: id == null ? '' : Number(id),
                         })
                       }
-                    >
-                      <option value="">Producto...</option>
-                      {productos.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                          {p.category_name ? ` (${p.category_name})` : ''}{' '}
-                          - Stock: {p.stock_quantity}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="Producto..."
+                      className="md:col-span-5"
+                      buttonClassName="h-11"
+                    />
                     <input
                       className="input-modern text-sm md:col-span-2"
                       type="number"

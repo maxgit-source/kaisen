@@ -7,7 +7,6 @@ const { SECRET, REFRESH_SECRET, addTokenToBlacklist } = require('../middlewares/
 const { sendVerificationEmail } = require('../utils/mailer');
 const users = require('../db/repositories/userRepository');
 const tokens = require('../db/repositories/tokenRepository');
-const licenseService = require('../services/licenseService');
 
 const JWT_ALG = process.env.JWT_ALG || 'HS256';
 const JWT_ISSUER = process.env.JWT_ISSUER;
@@ -27,18 +26,19 @@ function generateOtpCode() {
   return num.toString().padStart(6, '0');
 }
 
-function newTransaction(email, userId) {
+function newTransaction(email, userId, role) {
   const txId = crypto.randomBytes(16).toString('hex');
   const code = generateOtpCode();
   const expiresAt = Date.now() + OTP_TTL_MS;
-  otpStore.set(txId, { email, userId, code, expiresAt, attempts: 0 });
+  otpStore.set(txId, { email, userId, role: role || null, code, expiresAt, attempts: 0 });
   return { txId, code, expiresAt };
 }
 
 // Validation
 const validateLogin = [
   check('email').isEmail().normalizeEmail(),
-  check('password').isLength({ min: 6 }).trim().escape(),
+  // No sanitizar password para no alterar credenciales validas.
+  check('password').isString().isLength({ min: 6 }),
 ];
 
 function buildSignOpts(ttl) {
@@ -81,12 +81,6 @@ async function login(req, res) {
   if (!failedLoginAttempts.has(clientIp)) failedLoginAttempts.set(clientIp, 0);
 
   try {
-    const demoExpired = await licenseService.isDemoExpired();
-    if (demoExpired) {
-      return res.status(403).json({
-        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
-      });
-    }
     const user = await users.findByEmail((email || '').trim().toLowerCase());
     if (!user || user.activo === false) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
@@ -116,12 +110,6 @@ async function loginStep1(req, res) {
   const clientIp = req.ip;
   if (!failedLoginAttempts.has(clientIp)) failedLoginAttempts.set(clientIp, 0);
   try {
-    const demoExpired = await licenseService.isDemoExpired();
-    if (demoExpired) {
-      return res.status(403).json({
-        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
-      });
-    }
     const user = await users.findByEmail((email || '').trim().toLowerCase());
     if (!user || user.activo === false) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
@@ -135,7 +123,7 @@ async function loginStep1(req, res) {
       return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
     failedLoginAttempts.delete(clientIp);
-    const { txId, code } = newTransaction(user.email, user.id);
+    const { txId, code } = newTransaction(user.email, user.id, user.rol);
     try { await sendVerificationEmail(user.email, code); } catch (e) { console.error('OTP email error:', e.message); return res.status(500).json({ error: 'No se pudo enviar el código' }); }
     return res.json({ otpSent: true, txId });
   } catch (e) {
@@ -156,7 +144,7 @@ function loginStep2(req, res) {
 
   otpStore.delete(txId);
   if (!SECRET || !REFRESH_SECRET) return res.status(500).json({ error: 'Server JWT no configurado' });
-  const payload = { sub: rec.userId, email: rec.email };
+  const payload = { sub: rec.userId, email: rec.email, role: rec.role || null };
   const accessToken = jwt.sign(payload, SECRET, { ...buildSignOpts('15m'), jwtid: newJti() });
   const refreshJti = newJti();
   const refreshToken = jwt.sign(payload, REFRESH_SECRET, { ...buildSignOpts('7d'), jwtid: refreshJti });
@@ -179,12 +167,6 @@ async function refreshToken(req, res) {
   if (!refreshToken) return res.status(401).json({ error: 'Refresh token requerido' });
   if (!REFRESH_SECRET || !SECRET) return res.status(500).json({ error: 'JWT no configurado' });
   try {
-    const demoExpired = await licenseService.isDemoExpired();
-    if (demoExpired) {
-      return res.status(403).json({
-        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
-      });
-    }
     const verifyOptions = { algorithms: [JWT_ALG] };
     if (JWT_ISSUER) verifyOptions.issuer = JWT_ISSUER;
     if (JWT_AUDIENCE) verifyOptions.audience = JWT_AUDIENCE;

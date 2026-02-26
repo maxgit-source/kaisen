@@ -4,6 +4,12 @@ import { usePriceLabels } from '../lib/priceLabels';
 import { uploadImageToCloudinary } from '../lib/cloudinary';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
+import CategoryTreePicker from '../components/CategoryTreePicker';
+import {
+  type CategoryNode,
+  buildPathLabelFromDbPath,
+  flattenCategoryTree,
+} from '../lib/categoryTree';
 
 type Producto = {
   id: number;
@@ -11,6 +17,7 @@ type Producto = {
   codigo?: string | null;
   category_id: number;
   category_name: string;
+  category_path?: string | null;
   description?: string | null;
   image_url?: string | null;
   price: number;
@@ -90,7 +97,9 @@ function buildEmptyForm(tipoCambio: string) {
 export default function Productos() {
   const { labels: priceLabels } = usePriceLabels();
   const [productos, setProductos] = useState<Producto[]>([]);
-  const [categorias, setCategorias] = useState<{ id: number; name: string }[]>([]);
+  const [categoryTree, setCategoryTree] = useState<CategoryNode[]>([]);
+  const [categoryFilterId, setCategoryFilterId] = useState<number | null>(null);
+  const [includeDescendants, setIncludeDescendants] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -118,6 +127,11 @@ export default function Productos() {
   const [totalPages, setTotalPages] = useState(1);
   const [totalProductos, setTotalProductos] = useState(0);
   const filteredProductos = productos;
+  const flatCategories = useMemo(() => flattenCategoryTree(categoryTree), [categoryTree]);
+  const categoryById = useMemo(
+    () => new Map(flatCategories.map((c) => [Number(c.id), c])),
+    [flatCategories],
+  );
 
   const costoPesosNumber = useMemo(
     () => Number(form.costo_pesos || '0') || 0,
@@ -189,15 +203,19 @@ export default function Productos() {
     setError(null);
     try {
       const q = search.trim() || undefined;
-      const [prodsResponse, cats, configDolar] = await Promise.all([
-        Api.productos({ q, page: targetPage, paginated: true }),
-        Api.categorias(),
+      const [prodsResponse, configDolar] = await Promise.all([
+        Api.productos({
+          q,
+          page: targetPage,
+          paginated: true,
+          category_id: categoryFilterId ?? undefined,
+          include_descendants: categoryFilterId ? includeDescendants : undefined,
+        }),
         Api.getDolarBlue().catch(() => null),
       ]);
       const resp: any = prodsResponse || {};
       const data = (resp.data || resp) as Producto[];
       setProductos(data);
-      setCategorias(cats as { id: number; name: string }[]);
       if (configDolar && typeof (configDolar as any).valor === 'number') {
         setDolarBlue((configDolar as any).valor);
       }
@@ -214,13 +232,26 @@ export default function Productos() {
     }
   }
 
+  async function loadCategoryTree() {
+    try {
+      const data = (await Api.categoriasTree()) as CategoryNode[];
+      setCategoryTree(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudieron cargar las categorias');
+    }
+  }
+
+  useEffect(() => {
+    loadCategoryTree();
+  }, []);
+
   useEffect(() => {
     const handler = setTimeout(() => {
       setCurrentPage(1);
       load(1);
     }, 400);
     return () => clearTimeout(handler);
-  }, [search]);
+  }, [search, categoryFilterId, includeDescendants]);
 
   useEffect(() => {
     if (!dolarBlue) return;
@@ -278,11 +309,11 @@ export default function Productos() {
     if (!canSubmit) return;
     setError(null);
     const priceMode = form.precio_modo === 'manual' ? 'manual' : 'auto';
+    const normalizedImageUrl = form.image_url.trim();
     const payload: any = {
       name: form.name,
       codigo: form.codigo.trim() || undefined,
       description: form.description,
-      image_url: form.image_url,
       category_id: Number(form.category_id),
       stock_quantity: Number(form.stock_quantity || '0'),
       comision_pct:
@@ -300,6 +331,11 @@ export default function Productos() {
           ? Number(form.precio_final) || 0
           : undefined,
     };
+    if (normalizedImageUrl) {
+      payload.image_url = normalizedImageUrl;
+    } else if (editingProducto) {
+      payload.image_url = null;
+    }
     if (priceMode === 'manual') {
       payload.price_local = form.precio_local !== '' ? Number(form.precio_local) || 0 : undefined;
       payload.price_distribuidor =
@@ -424,6 +460,14 @@ export default function Productos() {
     }
   }
 
+  function getCategoryLabel(product: Producto) {
+    const fromPath = buildPathLabelFromDbPath(product.category_path, categoryById);
+    if (fromPath) return fromPath;
+    const fromMap = categoryById.get(Number(product.category_id));
+    if (fromMap?.pathLabel) return fromMap.pathLabel;
+    return product.category_name || '-';
+  }
+
   return (
     <div className="space-y-6">
       <h2 className="app-title">Productos</h2>
@@ -431,7 +475,7 @@ export default function Productos() {
         <div className="app-panel p-3 space-y-2">
           <div className="text-sm font-semibold text-slate-200">Importar productos desde Excel</div>
           <div className="text-xs text-slate-400">
-            Columnas sugeridas: nombre, categoria, precio o costo_pesos, stock, codigo (opcional), image_url (opcional).
+            Columnas sugeridas: nombre, categoria o category_path (ej: Fundas &gt; Samsung &gt; Brillo), precio o costo_pesos, stock, codigo (opcional), image_url (opcional).
           </div>
           {importError && <Alert kind="error" message={importError} />}
           {importResult && (
@@ -639,18 +683,12 @@ export default function Productos() {
               />
             </>
           )}
-          <select
-            className="input-modern text-sm"
-            value={form.category_id}
-            onChange={(e) => setForm({ ...form, category_id: e.target.value })}
-          >
-            <option value="">Categoría</option>
-            {categorias.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <CategoryTreePicker
+            tree={categoryTree}
+            value={form.category_id ? Number(form.category_id) : null}
+            onChange={(id) => setForm({ ...form, category_id: id ? String(id) : '' })}
+            placeholder="Categoria"
+          />
           <div className="md:col-span-2 flex flex-col gap-1">
             <input
               type="file"
@@ -778,11 +816,9 @@ export default function Productos() {
           </Button>
         </form>
 
-        <div className="flex justify-end mb-3">
-          <div className="flex items-center gap-2 w-full max-w-xs">
-            <span className="text-slate-400 text-sm whitespace-nowrap">
-              Buscar:
-            </span>
+        <div className="mb-3 grid grid-cols-1 lg:grid-cols-12 gap-2 items-center">
+          <div className="lg:col-span-5 flex items-center gap-2">
+            <span className="text-slate-400 text-sm whitespace-nowrap">Buscar:</span>
             <input
               className="input-modern text-sm w-full"
               placeholder="Nombre de producto..."
@@ -790,6 +826,24 @@ export default function Productos() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          <div className="lg:col-span-5">
+            <CategoryTreePicker
+              tree={categoryTree}
+              value={categoryFilterId}
+              onChange={setCategoryFilterId}
+              allowClear
+              placeholder="Filtrar por categoria (arbol)"
+            />
+          </div>
+          <label className="lg:col-span-2 flex items-center gap-2 text-xs text-slate-300 select-none">
+            <input
+              type="checkbox"
+              checked={includeDescendants}
+              onChange={(e) => setIncludeDescendants(e.target.checked)}
+              disabled={!categoryFilterId}
+            />
+            Incluir subcategorias
+          </label>
         </div>
 
         <div className="overflow-x-auto">
@@ -825,7 +879,7 @@ export default function Productos() {
                   >
                     <td className="py-2">{p.name}</td>
                     <td className="py-2">{p.codigo || '-'}</td>
-                    <td className="py-2">{p.category_name}</td>
+                    <td className="py-2">{getCategoryLabel(p)}</td>
                     <td className="py-2">
                       {p.costo_pesos != null
                         ? `$${p.costo_pesos.toFixed(2)}`

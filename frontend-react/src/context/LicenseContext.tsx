@@ -1,5 +1,4 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Api } from '../lib/api';
 import { useAuth } from './AuthContext';
 
 export type LicenseStatus = {
@@ -24,39 +23,50 @@ type LicenseContextType = {
   refresh: () => Promise<void>;
 };
 
+const CLOUD_FEATURES = [
+  'usuarios',
+  'arca',
+  'ai',
+  'marketplace',
+  'cloud',
+  'aprobaciones',
+  'crm',
+  'postventa',
+  'multideposito',
+] as const;
+
+const CLOUD_STATUS: LicenseStatus = {
+  licensed: true,
+  features: [...CLOUD_FEATURES],
+  max_users: null,
+  expires_at: null,
+  install_id: null,
+  reason: null,
+  license_type: 'full',
+  demo_active: false,
+  demo_started_at: null,
+  demo_expires_at: null,
+  demo_days_left: null,
+  demo_days_total: null,
+};
+
 const LicenseContext = createContext<LicenseContextType | undefined>(undefined);
 
 export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [status, setStatus] = useState<LicenseStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!isAuthenticated) {
-      setStatus(null);
-      setError(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await Api.licenseStatus();
-      setStatus(data as LicenseStatus);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo cargar la licencia');
-    } finally {
-      setLoading(false);
-    }
+    setStatus(isAuthenticated ? CLOUD_STATUS : null);
   }, [isAuthenticated]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ status, loading, error, refresh }),
-    [status, loading, error, refresh],
+    () => ({ status, loading: false, error: null, refresh }),
+    [status, refresh],
   );
 
   return <LicenseContext.Provider value={value}>{children}</LicenseContext.Provider>;

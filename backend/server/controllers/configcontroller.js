@@ -2,7 +2,6 @@ const { check, validationResult } = require('express-validator');
 const { withTransaction } = require('../db/pg');
 const configRepo = require('../db/repositories/configRepository');
 const audit = require('../services/auditService');
-const net = require('net');
 
 const PRICE_LABEL_KEYS = {
   local: 'price_label_local',
@@ -305,8 +304,6 @@ module.exports = {
   setPriceLabels: [...validateSetPriceLabels, setPriceLabelsHandler],
   getRankingMetric,
   setRankingMetric: [...validateSetRankingMetric, setRankingMetric],
-  getNetworkPolicy: getNetworkPolicyHandler,
-  setNetworkPolicy: setNetworkPolicyHandler,
   resetPanelData: resetPanelDataHandler,
 };
 
@@ -358,9 +355,17 @@ async function resetPanelDataHandler(req, res) {
           'Products',
         ];
         for (const table of tables) {
+          const exists = await client.query(
+            `SELECT 1
+               FROM information_schema.tables
+              WHERE table_schema = DATABASE()
+                AND table_name = $1
+              LIMIT 1`,
+            [table]
+          );
+          if (!exists.rows.length) continue;
           await client.query(`DELETE FROM ${table}`);
         }
-        await client.query('DELETE FROM sqlite_sequence');
       });
 
     await audit.log({
@@ -381,50 +386,5 @@ async function resetPanelDataHandler(req, res) {
     res
       .status(500)
       .json({ error: 'No se pudieron limpiar los datos del panel' });
-  }
-}
-
-async function getNetworkPolicyHandler(req, res) {
-  try {
-    const policy = (await configRepo.getNetworkPolicy()) || 'off';
-    const subnet = await configRepo.getNetworkSubnet();
-    res.json({ policy, subnet: subnet || null });
-  } catch (e) {
-    console.error('Error obteniendo politica de red:', e);
-    res.status(500).json({ error: 'No se pudo obtener la politica de red' });
-  }
-}
-
-async function setNetworkPolicyHandler(req, res) {
-  const policy = String(req.body?.policy || '').trim().toLowerCase();
-  const subnet = req.body?.subnet ? String(req.body.subnet).trim() : null;
-  const allowed = new Set(['off', 'private', 'subnet']);
-  if (!allowed.has(policy)) {
-    return res.status(400).json({ error: 'Politica invalida' });
-  }
-  if (policy === 'subnet') {
-    if (!subnet || !/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(subnet)) {
-      return res.status(400).json({ error: 'Subnet invalida. Ej: 192.168.0.0/24' });
-    }
-    const [ip, prefix] = subnet.split('/');
-    if (net.isIP(ip) !== 4 || Number(prefix) < 0 || Number(prefix) > 32) {
-      return res.status(400).json({ error: 'Subnet invalida. Ej: 192.168.0.0/24' });
-    }
-  }
-  const usuarioId =
-    req.user?.sub && Number.isFinite(Number(req.user.sub))
-      ? Number(req.user.sub)
-      : null;
-  try {
-    await configRepo.setNetworkPolicy(policy, usuarioId);
-    if (policy === 'subnet') {
-      await configRepo.setNetworkSubnet(subnet, usuarioId);
-    } else {
-      await configRepo.setNetworkSubnet(null, usuarioId);
-    }
-    res.json({ policy, subnet: policy === 'subnet' ? subnet : null });
-  } catch (e) {
-    console.error('Error guardando politica de red:', e);
-    res.status(500).json({ error: 'No se pudo guardar la politica de red' });
   }
 }

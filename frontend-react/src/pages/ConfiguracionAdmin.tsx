@@ -89,6 +89,7 @@ export default function ConfiguracionAdmin() {
   const [editMetodoId, setEditMetodoId] = useState<number | null>(null);
   const [editMetodoForm, setEditMetodoForm] = useState({ nombre: '', moneda: '', orden: '', activo: true });
   const cloudEnabled = hasFeature(licenseStatus, 'cloud');
+  const showCloudLinking = false;
 
   useEffect(() => {
     let mounted = true;
@@ -266,6 +267,15 @@ export default function ConfiguracionAdmin() {
 
   useEffect(() => {
     let active = true;
+    if (!showCloudLinking) {
+      setCloudStatus(null);
+      setCloudEndpoint('');
+      setCloudLoading(false);
+      setCloudError(null);
+      return () => {
+        active = false;
+      };
+    }
     if (!cloudEnabled) {
       setCloudStatus(null);
       setCloudEndpoint('');
@@ -293,7 +303,7 @@ export default function ConfiguracionAdmin() {
     return () => {
       active = false;
     };
-  }, [cloudEnabled]);
+  }, [cloudEnabled, showCloudLinking]);
 
   useEffect(() => {
     let active = true;
@@ -1416,108 +1426,110 @@ export default function ConfiguracionAdmin() {
             </form>
           </div>
         </div>
-        <div className="app-card p-4">
-          <div className="text-sm text-slate-300 mb-2">Vinculacion cloud</div>
-          <div className="space-y-3 text-sm text-slate-300">
-            {cloudLoading && <div className="text-xs text-slate-400">Cargando estado cloud...</div>}
-            {!cloudLoading && cloudStatus && (
-              <div className="space-y-1 text-xs text-slate-400">
-                <div>Estado: {cloudStatus.linked ? 'Vinculado' : 'Sin vincular'}</div>
-                {cloudStatus.device_id && (
-                  <div className="flex items-center gap-2">
-                    <span className="truncate">Device ID: {cloudStatus.device_id}</span>
-                    <button
-                      type="button"
-                      className="text-xs text-slate-400 hover:text-slate-200"
-                      onClick={() => navigator.clipboard?.writeText(cloudStatus.device_id || '')}
-                    >
-                      Copiar
-                    </button>
-                  </div>
-                )}
-                {cloudStatus.endpoint && (
-                  <div className="truncate">Endpoint sync: {cloudStatus.endpoint}</div>
-                )}
-                {cloudStatus.slug && cloudStatus.endpoint && (
-                  <div className="truncate">
-                    URL publica:{' '}
-                    {`${cloudStatus.endpoint.replace(/\/api\/?$/, '').replace(/\/$/, '')}/${cloudStatus.slug}`}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {cloudError && <Alert kind="error" message={cloudError} />}
-            {cloudSuccess && <Alert kind="info" message={cloudSuccess} />}
-            {cloudSnapshotError && <Alert kind="error" message={cloudSnapshotError} />}
-            {cloudSnapshotSuccess && <Alert kind="info" message={cloudSnapshotSuccess} />}
-            {cloudQueueError && <Alert kind="error" message={cloudQueueError} />}
-
-            <form onSubmit={onActivateCloud} className="space-y-2">
-              <label className="block text-xs text-slate-400">Token de vinculacion</label>
-              <input
-                className="input-modern w-full text-xs"
-                placeholder="Pegue aqui el token cloud"
-                value={cloudToken}
-                onChange={(e) => setCloudToken(e.target.value)}
-              />
-              <label className="block text-xs text-slate-400">Endpoint cloud (opcional)</label>
-              <input
-                className="input-modern w-full text-xs"
-                placeholder="https://mi-nube.com"
-                value={cloudEndpoint}
-                onChange={(e) => setCloudEndpoint(e.target.value)}
-              />
-              <button
-                type="submit"
-                className="h-9 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                disabled={cloudSaving}
-              >
-                {cloudSaving ? 'Guardando...' : 'Vincular cloud'}
-              </button>
-            </form>
-            <button
-              type="button"
-              className="h-9 rounded-lg bg-slate-700 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={cloudSnapshotLoading}
-              onClick={onSnapshotCloud}
-            >
-              {cloudSnapshotLoading ? 'Encolando...' : 'Reenviar catalogo completo'}
-            </button>
-            <button
-              type="button"
-              className="h-9 rounded-lg bg-slate-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={cloudQueueLoading}
-              onClick={refreshCloudQueueStatus}
-            >
-              {cloudQueueLoading ? 'Actualizando...' : 'Ver estado de sync'}
-            </button>
-            {cloudQueueStatus && (
-              <div className="text-xs text-slate-400 space-y-1">
-                <div>
-                  Pendientes: {cloudQueueStatus.summary?.pending || 0} | Procesando:{' '}
-                  {cloudQueueStatus.summary?.processing || 0} | Enviados:{' '}
-                  {cloudQueueStatus.summary?.sent || 0} | Error:{' '}
-                  {cloudQueueStatus.summary?.error || 0}
-                </div>
-                {cloudQueueStatus.last_sent_at && (
-                  <div>Ultimo envio: {new Date(cloudQueueStatus.last_sent_at).toLocaleString()}</div>
-                )}
-                {Array.isArray(cloudQueueStatus.recent_errors) &&
-                  cloudQueueStatus.recent_errors.length > 0 && (
-                    <div>
-                      Errores recientes:
-                      <ul className="list-disc pl-4">
-                        {cloudQueueStatus.recent_errors.map((e: any) => (
-                          <li key={e.id}>{e.last_error || 'error'}</li>
-                        ))}
-                      </ul>
+        {showCloudLinking && (
+          <div className="app-card p-4">
+            <div className="text-sm text-slate-300 mb-2">Vinculacion cloud</div>
+            <div className="space-y-3 text-sm text-slate-300">
+              {cloudLoading && <div className="text-xs text-slate-400">Cargando estado cloud...</div>}
+              {!cloudLoading && cloudStatus && (
+                <div className="space-y-1 text-xs text-slate-400">
+                  <div>Estado: {cloudStatus.linked ? 'Vinculado' : 'Sin vincular'}</div>
+                  {cloudStatus.device_id && (
+                    <div className="flex items-center gap-2">
+                      <span className="truncate">Device ID: {cloudStatus.device_id}</span>
+                      <button
+                        type="button"
+                        className="text-xs text-slate-400 hover:text-slate-200"
+                        onClick={() => navigator.clipboard?.writeText(cloudStatus.device_id || '')}
+                      >
+                        Copiar
+                      </button>
                     </div>
                   )}
-              </div>
-            )}
+                  {cloudStatus.endpoint && (
+                    <div className="truncate">Endpoint sync: {cloudStatus.endpoint}</div>
+                  )}
+                  {cloudStatus.slug && cloudStatus.endpoint && (
+                    <div className="truncate">
+                      URL publica:{' '}
+                      {`${cloudStatus.endpoint.replace(/\/api\/?$/, '').replace(/\/$/, '')}/${cloudStatus.slug}`}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {cloudError && <Alert kind="error" message={cloudError} />}
+              {cloudSuccess && <Alert kind="info" message={cloudSuccess} />}
+              {cloudSnapshotError && <Alert kind="error" message={cloudSnapshotError} />}
+              {cloudSnapshotSuccess && <Alert kind="info" message={cloudSnapshotSuccess} />}
+              {cloudQueueError && <Alert kind="error" message={cloudQueueError} />}
+
+              <form onSubmit={onActivateCloud} className="space-y-2">
+                <label className="block text-xs text-slate-400">Token de vinculacion</label>
+                <input
+                  className="input-modern w-full text-xs"
+                  placeholder="Pegue aqui el token cloud"
+                  value={cloudToken}
+                  onChange={(e) => setCloudToken(e.target.value)}
+                />
+                <label className="block text-xs text-slate-400">Endpoint cloud (opcional)</label>
+                <input
+                  className="input-modern w-full text-xs"
+                  placeholder="https://mi-nube.com"
+                  value={cloudEndpoint}
+                  onChange={(e) => setCloudEndpoint(e.target.value)}
+                />
+                <button
+                  type="submit"
+                  className="h-9 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={cloudSaving}
+                >
+                  {cloudSaving ? 'Guardando...' : 'Vincular cloud'}
+                </button>
+              </form>
+              <button
+                type="button"
+                className="h-9 rounded-lg bg-slate-700 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={cloudSnapshotLoading}
+                onClick={onSnapshotCloud}
+              >
+                {cloudSnapshotLoading ? 'Encolando...' : 'Reenviar catalogo completo'}
+              </button>
+              <button
+                type="button"
+                className="h-9 rounded-lg bg-slate-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={cloudQueueLoading}
+                onClick={refreshCloudQueueStatus}
+              >
+                {cloudQueueLoading ? 'Actualizando...' : 'Ver estado de sync'}
+              </button>
+              {cloudQueueStatus && (
+                <div className="text-xs text-slate-400 space-y-1">
+                  <div>
+                    Pendientes: {cloudQueueStatus.summary?.pending || 0} | Procesando:{' '}
+                    {cloudQueueStatus.summary?.processing || 0} | Enviados:{' '}
+                    {cloudQueueStatus.summary?.sent || 0} | Error:{' '}
+                    {cloudQueueStatus.summary?.error || 0}
+                  </div>
+                  {cloudQueueStatus.last_sent_at && (
+                    <div>Ultimo envio: {new Date(cloudQueueStatus.last_sent_at).toLocaleString()}</div>
+                  )}
+                  {Array.isArray(cloudQueueStatus.recent_errors) &&
+                    cloudQueueStatus.recent_errors.length > 0 && (
+                      <div>
+                        Errores recientes:
+                        <ul className="list-disc pl-4">
+                          {cloudQueueStatus.recent_errors.map((e: any) => (
+                            <li key={e.id}>{e.last_error || 'error'}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

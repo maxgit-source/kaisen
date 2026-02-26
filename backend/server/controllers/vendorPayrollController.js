@@ -1,6 +1,7 @@
 const { body, validationResult } = require('express-validator');
 const repo = require('../db/repositories/vendorPayrollRepository');
 const payroll = require('../services/vendorPayrollService');
+const pricingRepo = require('../db/repositories/pricingRepository');
 
 function handleValidation(req, res) {
   const errors = validationResult(req);
@@ -42,9 +43,10 @@ async function listSueldos(req, res) {
       hasta: req.query.hasta,
     });
 
-    const [ventasRows, pagosRows] = await Promise.all([
+    const [ventasRows, pagosRows, commissionConfig] = await Promise.all([
       repo.ventasResumenPorVendedor({ desde: range.fromStr, hasta: range.toStr }),
       repo.pagosSumPorVendedor({ periodo: range.periodo, desde: range.fromStr, hasta: range.toStr }),
+      pricingRepo.getCommissionConfig().catch(() => ({ mode: 'producto' })),
     ]);
 
     const pagosByUser = new Map();
@@ -66,7 +68,7 @@ async function listSueldos(req, res) {
         ventas_count: Number(row.ventas_count || 0),
         ventas_total: ventasTotal,
         comision_porcentaje: 0,
-        comision_base: 'producto',
+        comision_base: commissionConfig?.mode === 'lista' ? 'lista' : 'producto',
         comision_monto: comisionMonto,
         pagado_total: pagadoTotal,
         saldo,

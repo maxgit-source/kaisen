@@ -1,4 +1,5 @@
 const { query } = require('../db/pg');
+const categoryRepo = require('../db/repositories/categoryRepository');
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
@@ -40,6 +41,10 @@ const DEFAULT_STOCKOUT_DAYS_MED = Math.max(
 const forecastCache = new Map();
 const insightsCache = new Map();
 const configCache = { ts: 0, data: null };
+
+function inMarks(start, count) {
+  return Array.from({ length: count }, (_, idx) => `$${start + idx}`).join(', ');
+}
 
 function getCache(cache, key, ttlMs) {
   const hit = cache.get(key);
@@ -133,12 +138,18 @@ function httpRequest(rawUrl, { method = 'GET', headers = {}, body } = {}) {
   });
 }
 
-async function getProductsBasic(categoryId) {
+async function getProductsBasic(categoryId, { includeDescendants = false } = {}) {
   const params = [];
   const where = [];
   if (categoryId != null) {
-    params.push(Number(categoryId));
-    where.push(`categoria_id = $${params.length}`);
+    const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
+      includeDescendants: Boolean(includeDescendants),
+      onlyActive: true,
+    });
+    if (!ids.length) return [];
+    const start = params.length + 1;
+    params.push(...ids);
+    where.push(`categoria_id IN (${inMarks(start, ids.length)})`);
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const { rows } = await query(
@@ -167,14 +178,20 @@ async function getInventoryMap() {
   return map;
 }
 
-async function getSalesQtyByProduct(historyDays = 90, categoryId) {
+async function getSalesQtyByProduct(historyDays = 90, categoryId, { includeDescendants = false } = {}) {
   const dateKeys = buildDateRange(historyDays);
   const startDate = dateKeys[0];
   const params = [startDate];
   let categoryFilter = '';
   if (categoryId != null) {
-    params.push(Number(categoryId));
-    categoryFilter = `AND p.categoria_id = $${params.length}`;
+    const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
+      includeDescendants: Boolean(includeDescendants),
+      onlyActive: true,
+    });
+    if (!ids.length) return new Map();
+    const start = params.length + 1;
+    params.push(...ids);
+    categoryFilter = `AND p.categoria_id IN (${inMarks(start, ids.length)})`;
   }
   const { rows } = await query(
     `SELECT vd.producto_id AS id, SUM(vd.cantidad)::float AS unidades
@@ -192,14 +209,20 @@ async function getSalesQtyByProduct(historyDays = 90, categoryId) {
   return map;
 }
 
-async function getSalesSeriesBundle({ historyDays = 90, categoryId } = {}) {
+async function getSalesSeriesBundle({ historyDays = 90, categoryId, includeDescendants = false } = {}) {
   const dateKeys = buildDateRange(historyDays);
   const startDate = dateKeys[0];
   const params = [startDate];
   let categoryFilter = '';
   if (categoryId != null) {
-    params.push(Number(categoryId));
-    categoryFilter = `AND p.categoria_id = $${params.length}`;
+    const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
+      includeDescendants: Boolean(includeDescendants),
+      onlyActive: true,
+    });
+    if (!ids.length) return { dateKeys, seriesMap: new Map() };
+    const start = params.length + 1;
+    params.push(...ids);
+    categoryFilter = `AND p.categoria_id IN (${inMarks(start, ids.length)})`;
   }
   const { rows } = await query(
     `SELECT vd.producto_id AS id,
@@ -388,16 +411,22 @@ async function callPythonForecast({ products, historyDays, forecastDays, seriesB
   return data.forecasts;
 }
 
-async function buildForecastList({ forecastDays = 14, historyDays = 90, stockTargetDays, categoryId } = {}) {
+async function buildForecastList({
+  forecastDays = 14,
+  historyDays = 90,
+  stockTargetDays,
+  categoryId,
+  includeDescendants = false,
+} = {}) {
   const targetDays = Math.max(7, toNumber(stockTargetDays, DEFAULT_STOCK_TARGET_DAYS));
-  const cacheKey = `forecast:${historyDays}:${forecastDays}:${targetDays}:${categoryId ?? 'all'}`;
+  const cacheKey = `forecast:${historyDays}:${forecastDays}:${targetDays}:${categoryId ?? 'all'}:${includeDescendants ? 'tree' : 'node'}`;
   const cached = getCache(forecastCache, cacheKey, FORECAST_CACHE_MS);
   if (cached) return cached;
 
   const [products, invMap, seriesBundle] = await Promise.all([
-    getProductsBasic(categoryId),
+    getProductsBasic(categoryId, { includeDescendants }),
     getInventoryMap(),
-    getSalesSeriesBundle({ historyDays, categoryId }),
+    getSalesSeriesBundle({ historyDays, categoryId, includeDescendants }),
   ]);
 
   let pyDailyAvgById = null;
@@ -454,20 +483,40 @@ async function buildForecastList({ forecastDays = 14, historyDays = 90, stockTar
   return setCache(forecastCache, cacheKey, list);
 }
 
-async function forecastByProductSimple({ forecastDays = 14, historyDays = 90, limit = 100, stockTargetDays, categoryId }) {
-  const list = await buildForecastList({ forecastDays, historyDays, stockTargetDays, categoryId });
+async function forecastByProductSimple({
+  forecastDays = 14,
+  historyDays = 90,
+  limit = 100,
+  stockTargetDays,
+  categoryId,
+  includeDescendants = false,
+}) {
+  const list = await buildForecastList({ forecastDays, historyDays, stockTargetDays, categoryId, includeDescendants });
   const finalLimit = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
   return list.slice(0, finalLimit);
 }
 
-async function forecastByProduct({ forecastDays = 14, historyDays = 90, limit = 100, stockTargetDays, categoryId }) {
-  const list = await buildForecastList({ forecastDays, historyDays, stockTargetDays, categoryId });
+async function forecastByProduct({
+  forecastDays = 14,
+  historyDays = 90,
+  limit = 100,
+  stockTargetDays,
+  categoryId,
+  includeDescendants = false,
+}) {
+  const list = await buildForecastList({ forecastDays, historyDays, stockTargetDays, categoryId, includeDescendants });
   const finalLimit = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
   return list.slice(0, finalLimit);
 }
 
-async function stockouts({ days = 14, historyDays = 90, limit = 100, categoryId }) {
-  const forecast = await forecastByProduct({ forecastDays: days, historyDays, limit: 5000, categoryId });
+async function stockouts({ days = 14, historyDays = 90, limit = 100, categoryId, includeDescendants = false }) {
+  const forecast = await forecastByProduct({
+    forecastDays: days,
+    historyDays,
+    limit: 5000,
+    categoryId,
+    includeDescendants,
+  });
   const atRisk = forecast
     .filter((r) => r.daily_avg > 0 && r.disponible / r.daily_avg < Number(days))
     .map((r) => ({

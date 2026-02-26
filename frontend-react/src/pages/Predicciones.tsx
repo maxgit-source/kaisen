@@ -15,6 +15,8 @@ import Alert from '../components/Alert';
 import { useLicense } from '../context/LicenseContext';
 import { hasFeature } from '../lib/features';
 import { Api } from '../lib/api';
+import CategoryTreePicker from '../components/CategoryTreePicker';
+import type { CategoryNode } from '../lib/categoryTree';
 
 type ForecastRow = {
   producto_id: number;
@@ -95,6 +97,9 @@ export default function Predicciones() {
   const [stockouts, setStockouts] = useState<StockoutRow[]>([]);
   const [anomSales, setAnomSales] = useState<AnomaliaRow[]>([]);
   const [precios, setPrecios] = useState<PrecioRow[]>([]);
+  const [categoryTree, setCategoryTree] = useState<CategoryNode[]>([]);
+  const [categoryFilterId, setCategoryFilterId] = useState<number | null>(null);
+  const [includeDescendants, setIncludeDescendants] = useState(true);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +151,8 @@ export default function Predicciones() {
   async function loadData(params?: { days?: number; history?: number }) {
     const days = params?.days ?? horizon;
     const hist = params?.history ?? history;
+    const categoryId = categoryFilterId ?? undefined;
+    const includeTree = categoryId ? includeDescendants : false;
     setLoading(true);
     setError(null);
     setSectionErrors({
@@ -156,8 +163,20 @@ export default function Predicciones() {
     });
     try {
       const results = await Promise.allSettled([
-        Api.aiForecast({ days, history: hist, limit: 50 }),
-        Api.aiStockouts({ days, history: hist, limit: 50 }),
+        Api.aiForecast({
+          days,
+          history: hist,
+          limit: 50,
+          category_id: categoryId,
+          include_descendants: includeTree,
+        }),
+        Api.aiStockouts({
+          days,
+          history: hist,
+          limit: 50,
+          category_id: categoryId,
+          include_descendants: includeTree,
+        }),
         Api.aiAnomalias({ scope: 'sales', period: hist, sigma: 3 }),
         Api.aiPrecios({ history: hist, limit: 50 }),
       ]);
@@ -222,7 +241,17 @@ export default function Predicciones() {
     }
   }
 
+  async function loadCategoryTree() {
+    try {
+      const rows = await Api.categoriasTree();
+      setCategoryTree(Array.isArray(rows) ? (rows as CategoryNode[]) : []);
+    } catch {
+      setCategoryTree([]);
+    }
+  }
+
   useEffect(() => {
+    loadCategoryTree();
     loadData({ days: horizon, history });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -364,6 +393,8 @@ export default function Predicciones() {
         days: horizon,
         history,
         limit: 8,
+        category_id: categoryFilterId ?? undefined,
+        include_descendants: categoryFilterId ? includeDescendants : undefined,
       });
       setSummaryText(resp?.narrative || '');
       setSummaryData(resp?.data || null);
@@ -503,6 +534,25 @@ export default function Predicciones() {
               <option value={90}>90 días</option>
             </select>
           </div>
+          <div className="flex flex-col text-xs text-slate-400 min-w-[260px]">
+            <span className="mb-1">Categoria</span>
+            <CategoryTreePicker
+              tree={categoryTree}
+              value={categoryFilterId}
+              onChange={setCategoryFilterId}
+              allowClear
+              placeholder="Todas las categorias"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs text-slate-300 pb-2 select-none">
+            <input
+              type="checkbox"
+              checked={includeDescendants}
+              onChange={(e) => setIncludeDescendants(e.target.checked)}
+              disabled={!categoryFilterId}
+            />
+            Incluir subcategorias
+          </label>
           <Button
             onClick={() => loadData()}
             className="h-11 px-4"

@@ -1,12 +1,21 @@
 const { query } = require('../../db/pg');
 
-async function list({ q, estado, tipo_cliente, segmento, limit = 50, offset = 0, allowAll = false } = {}) {
+async function list({
+  q,
+  estado,
+  tipo_cliente,
+  segmento,
+  limit = 50,
+  offset = 0,
+  allowAll = false,
+  view,
+} = {}) {
   const where = [];
   const params = [];
   if (q) {
     params.push(`%${q.toLowerCase()}%`);
     where.push(
-      `(LOWER(nombre) LIKE $${params.length} OR LOWER(apellido) LIKE $${params.length} OR LOWER(nombre || ' ' || COALESCE(apellido, '')) LIKE $${params.length})`
+      `(LOWER(nombre) LIKE $${params.length} OR LOWER(apellido) LIKE $${params.length} OR LOWER(CONCAT(nombre, ' ', COALESCE(apellido, ''))) LIKE $${params.length})`
     );
   }
   if (estado) {
@@ -26,9 +35,17 @@ async function list({ q, estado, tipo_cliente, segmento, limit = 50, offset = 0,
   const off = Math.max(parseInt(offset, 10) || 0, 0);
   params.push(lim);
   params.push(off);
-  const sql = `SELECT id, nombre, apellido, telefono, email, direccion, cuit_cuil,
-                      tipo_doc, nro_doc, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
-                      zona_id, fecha_registro, estado, tipo_cliente, segmento, tags
+  const viewMode = String(view || '').trim().toLowerCase();
+  const selectColumns =
+    viewMode === 'mobile'
+      ? `id, nombre, apellido, telefono, email, direccion, entre_calles, cuit_cuil,
+         tipo_doc, nro_doc, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
+         zona_id, estado, tipo_cliente, segmento, tags`
+      : `id, nombre, apellido, telefono, email, direccion, entre_calles, cuit_cuil,
+         tipo_doc, nro_doc, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
+         zona_id, fecha_registro, estado, tipo_cliente, segmento, tags`;
+
+  const sql = `SELECT ${selectColumns}
                  FROM clientes
                 ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                 ORDER BY id DESC
@@ -44,6 +61,7 @@ async function create({
   telefono,
   email,
   direccion,
+  entre_calles,
   cuit_cuil,
   tipo_doc,
   nro_doc,
@@ -60,11 +78,11 @@ async function create({
 }) {
   const { rows } = await query(
     `INSERT INTO clientes(
-        nombre, apellido, telefono, email, direccion, cuit_cuil,
+        nombre, apellido, telefono, email, direccion, entre_calles, cuit_cuil,
         tipo_doc, nro_doc, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
         zona_id, estado, tipo_cliente, segmento, tags
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      RETURNING id`,
     [
       nombre,
@@ -72,6 +90,7 @@ async function create({
       telefono || null,
       email || null,
       direccion || null,
+      entre_calles || null,
       cuit_cuil || null,
       tipo_doc || null,
       nro_doc || null,
@@ -122,6 +141,7 @@ async function update(id, fields) {
     telefono: 'telefono',
     email: 'email',
     direccion: 'direccion',
+    entre_calles: 'entre_calles',
     cuit_cuil: 'cuit_cuil',
     tipo_doc: 'tipo_doc',
     nro_doc: 'nro_doc',

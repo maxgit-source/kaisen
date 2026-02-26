@@ -4,6 +4,7 @@ import { usePriceLabels } from '../lib/priceLabels';
 import { uploadImageToCloudinary } from '../lib/cloudinary';
 import Alert from '../components/Alert';
 import Button from '../ui/Button';
+import ProductPicker from '../components/ProductPicker';
 
 type ProductoOption = {
   id: number;
@@ -16,11 +17,12 @@ type ProductoOption = {
 
 export default function CatalogoAdmin() {
   const { labels: priceLabels } = usePriceLabels();
-  const SHOW_PUBLIC_CATALOGO = false;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [emitLoading, setEmitLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [emitUrl, setEmitUrl] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [productos, setProductos] = useState<ProductoOption[]>([]);
@@ -34,6 +36,7 @@ export default function CatalogoAdmin() {
   const [form, setForm] = useState({
     nombre: '',
     logo_url: '',
+    dominio: '',
     destacado_producto_id: '',
     price_type: 'final' as 'final' | 'distribuidor' | 'mayorista',
   });
@@ -65,6 +68,7 @@ export default function CatalogoAdmin() {
         setForm({
           nombre: cfg.nombre || '',
           logo_url: cfg.logo_url || '',
+          dominio: cfg.dominio || '',
           destacado_producto_id:
             cfg.destacado_producto_id != null ? String(cfg.destacado_producto_id) : '',
           price_type: (cfg.price_type as any) || 'final',
@@ -103,11 +107,13 @@ export default function CatalogoAdmin() {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    setEmitUrl(null);
     setSaving(true);
     try {
       await Api.guardarCatalogoConfig({
         nombre: form.nombre.trim(),
         logo_url: form.logo_url.trim(),
+        dominio: form.dominio.trim(),
         destacado_producto_id: form.destacado_producto_id
           ? Number(form.destacado_producto_id)
           : null,
@@ -122,10 +128,39 @@ export default function CatalogoAdmin() {
     }
   }
 
+  async function onEmitCatalog() {
+    setError(null);
+    setSuccess(null);
+    setEmitLoading(true);
+    try {
+      const res: any = await Api.emitirCatalogo();
+      const url = String(res?.url || '').trim();
+      if (!url) {
+        throw new Error('No se pudo resolver la URL de publicacion');
+      }
+      setEmitUrl(url);
+      setSuccess(`Catalogo emitido en ${url}`);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo emitir el catalogo');
+    } finally {
+      setEmitLoading(false);
+    }
+  }
+
   const destacadoPreview = useMemo(() => {
     const id = Number(form.destacado_producto_id || 0);
     return productos.find((p) => p.id === id) || null;
   }, [form.destacado_producto_id, productos]);
+  const productOptions = useMemo(
+    () =>
+      productos.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category_name: p.category_name || null,
+      })),
+    [productos],
+  );
 
   async function handleDownloadExcel() {
     setExcelError(null);
@@ -227,6 +262,13 @@ export default function CatalogoAdmin() {
                   <div className="text-xs text-slate-400">Subiendo logo...</div>
                 )}
               </div>
+              <input
+                className="input-modern w-full text-sm"
+                placeholder="Dominio publico (ej: catalogo.midominio.com)"
+                value={form.dominio}
+                onChange={(e) => setForm((prev) => ({ ...prev, dominio: e.target.value }))}
+                disabled={loading || saving || emitLoading}
+              />
               <div className="space-y-1">
                 <label className="block text-xs text-slate-400">Precio visible en el catalogo</label>
                 <select
@@ -249,22 +291,19 @@ export default function CatalogoAdmin() {
 
             <div className="space-y-3">
               <div className="text-sm text-slate-300">Producto destacado (hero)</div>
-              <select
-                className="input-modern w-full text-sm"
-                value={form.destacado_producto_id}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, destacado_producto_id: e.target.value }))
+              <ProductPicker
+                options={productOptions}
+                value={form.destacado_producto_id ? Number(form.destacado_producto_id) : null}
+                onChange={(id) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    destacado_producto_id: id == null ? '' : String(id),
+                  }))
                 }
+                placeholder="Sin destacado"
                 disabled={loading || saving}
-              >
-                <option value="">Sin destacado</option>
-                {productos.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                    {p.category_name ? ` - ${p.category_name}` : ''}
-                  </option>
-                ))}
-              </select>
+                allowClear
+              />
               {destacadoPreview && (
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
                   {destacadoPreview.image_url ? (
@@ -295,27 +334,27 @@ export default function CatalogoAdmin() {
 
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div className="text-xs text-slate-400">
-              El catalogo siempre esta visible para clientes bajo el dominio principal.
+              Define el dominio y usa "Emitir catalogo" para publicar la URL final.
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={saving || loading}>
                 {saving ? 'Guardando...' : 'Guardar configuracion'}
               </Button>
-              {SHOW_PUBLIC_CATALOGO && (
-                <button
-                  type="button"
-                  className="h-11 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60"
-                  onClick={() => {
-                    const url = `${window.location.origin}/catalogo`;
-                    window.open(url, '_blank', 'noopener,noreferrer');
-                  }}
-                  disabled={saving || loading}
-                >
-                  Emitir catalogo
-                </button>
-              )}
+              <button
+                type="button"
+                className="h-11 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60"
+                onClick={onEmitCatalog}
+                disabled={saving || loading || emitLoading}
+              >
+                {emitLoading ? 'Emitiendo...' : 'Emitir catalogo'}
+              </button>
             </div>
           </div>
+          {emitUrl && (
+            <div className="text-xs text-emerald-300 break-all">
+              URL emitida: {emitUrl}
+            </div>
+          )}
         </form>
       ) : (
         <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-4 space-y-4">

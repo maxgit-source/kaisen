@@ -25,11 +25,12 @@ async function findById(id) {
   return rows[0] || null;
 }
 
-async function list({ q, activo, limit = 100, offset = 0 } = {}) {
+async function list({ q, activo, role, limit = 100, offset = 0 } = {}) {
   const where = [];
   const params = [];
   if (q) { params.push(`%${q.toLowerCase()}%`); where.push(`(LOWER(u.nombre) LIKE $${params.length} OR LOWER(u.email) LIKE $${params.length})`); }
   if (typeof activo !== 'undefined') { params.push(activo === 'true' ? true : false); where.push(`u.activo = $${params.length}`); }
+  if (role) { params.push(String(role).trim().toLowerCase()); where.push(`LOWER(r.nombre) = $${params.length}`); }
   const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
   const off = Math.max(parseInt(offset, 10) || 0, 0);
   params.push(lim); params.push(off);
@@ -79,6 +80,19 @@ async function setPasswordHash(id, password_hash) {
 async function listRoles() {
   const { rows } = await query('SELECT id, nombre FROM roles ORDER BY id');
   return rows;
+}
+
+async function getRoleByName(name) {
+  const roleName = String(name || '').trim().toLowerCase();
+  if (!roleName) return null;
+  const { rows } = await query(
+    `SELECT id, nombre
+       FROM roles
+      WHERE LOWER(nombre) = $1
+      LIMIT 1`,
+    [roleName]
+  );
+  return rows[0] || null;
 }
 
 async function sellerPerformance({ desde, hasta } = {}) {
@@ -165,6 +179,7 @@ module.exports = {
   update,
   setPasswordHash,
   listRoles,
+  getRoleByName,
   sellerPerformance,
   hasAdmin,
   countActive,

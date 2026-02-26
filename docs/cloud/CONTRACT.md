@@ -1,78 +1,62 @@
-# Cloud API contract (phase 1-2)
+# Cloud API contract (cloud-only)
 
-Base URL (cloud): https://<cloud-host>
+Base URL: `https://<tu-backend-hostinger>`
 
-## Admin (secret panel)
+## Health
+### GET /api/healthz
+Respuesta:
+```
+{ "status": "ok", "db": "ok" }
+```
 
-### POST /api/admin/tenants
-Creates a tenant and issues a one-time token.
+## Setup inicial
+### GET /api/setup/status
+Respuesta:
+```
+{ "requiresSetup": true|false }
+```
 
+### POST /api/setup/admin
 Body:
-{
-  "name": "Ferreteria El Tornillo",
-  "slug": "el-tornillo" (optional)
-}
+```
+{ "nombre": "Admin", "email": "admin@empresa.com", "password": "******" }
+```
+Respuesta: `201 { "ok": true }`
 
-Response:
-{
-  "tenant_id": "uuid",
-  "slug": "el-tornillo",
-  "token": "TL-EL-TORNILLO-XXXX-YYYY",
-  "token_preview": "TL-EL-***-YYYY"
-}
+## Auth
+### POST /api/login
+### POST /api/login-step1
+### POST /api/login-step2
+### POST /api/refresh-token
+### POST /api/logout
 
-### POST /api/admin/tenants/:id/rotate-token
-Revokes previous token and returns a new one.
+## Usuarios
+### GET /api/usuarios
+### POST /api/usuarios
+### PUT /api/usuarios/:id
+### GET /api/usuarios/vendedores
 
-## Sync (from local ERP)
+Regla actual:
+- Creacion/edicion restringida por rol (`admin`).
+- No hay activacion por licencia ni install_id.
 
-### POST /api/sync
-Auth: Authorization: Bearer <token>
+## Catalogo
+### GET /api/catalogo/config
+### PUT /api/catalogo/config
+Campos relevantes:
+- `nombre`
+- `logo_url`
+- `destacado_producto_id`
+- `publicado`
+- `price_type`
+- `slug`
 
-Body:
-{
-  "device_id": "HW-ABC123...",
-  "events": [
-    {
-      "id": 123,
-      "entity": "catalogo_producto",
-      "entity_id": 10,
-      "action": "upsert",
-      "payload": { ... },
-      "created_at": "2026-01-27T12:00:00Z"
-    }
-  ]
-}
+### GET /api/catalogo/public/:slug
+Entrega catalogo publico ya centralizado en cloud.
 
-Response (minimal v1):
-{
-  "accepted": [123],
-  "rejected": []
-}
-
-### POST /api/sync/snapshot
-Auth: Authorization: Bearer <token>
-
-Body:
-{
-  "config": { ... },
-  "categorias": [ ... ],
-  "productos": [ ... ]
-}
-
-Response:
-{ "ok": true }
-
-## Public catalog
-
-### GET /api/public/:slug/catalog
-Response:
-{
-  "config": { ... },
-  "destacado": { ... } | null,
-  "categorias": [ ... ],
-  "productos": [ ... ]
-}
-
-### GET /:slug
-Public catalog page (SSR/SPA).
+## Endpoints removidos en cloud-only
+- `/api/server-info`
+- `/api/license/*`
+- `/api/cloud/*`
+- `/api/backup/*`
+- `/api/config/network`

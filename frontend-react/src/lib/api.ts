@@ -203,7 +203,25 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     throw new Error(errMsg);
   }
   const text = await res.text();
-  return text ? JSON.parse(text) : (undefined as any);
+  if (!text) return undefined as any;
+
+  const contentType = res.headers.get('content-type') || '';
+  const looksJson = contentType.includes('application/json');
+
+  if (looksJson) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('Respuesta invalida del servidor');
+    }
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Algunos endpoints/proxys devuelven texto plano; no romper toda la UI por eso.
+    return text as any;
+  }
 }
 
 // Domain helpers
@@ -233,69 +251,96 @@ export const Api = {
       method: 'PUT',
       body: JSON.stringify({ valor }),
     }),
-  licenseStatus: () => apiFetch('/api/license/status'),
+  licenseStatus: async () => ({
+    status: 'cloud',
+    licensed: true,
+    plan: 'cloud',
+    expires_at: null,
+    features: [
+      'usuarios',
+      'arca',
+      'ai',
+      'marketplace',
+      'cloud',
+      'aprobaciones',
+      'crm',
+      'postventa',
+      'multideposito',
+    ],
+  }),
   licenseInstallId: () => licenseInstallId(),
   activateLicensePublic: (code: string) => activateLicensePublic(code),
-  activateLicense: (code: string) =>
-    apiFetch('/api/license/activate', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-    }),
-  cloudStatus: () => apiFetch('/api/cloud/status'),
-  cloudActivate: (body: { token: string; endpoint?: string | null }) =>
-    apiFetch('/api/cloud/activate', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  cloudSnapshot: () =>
-    apiFetch('/api/cloud/snapshot', {
-      method: 'POST',
-    }),
-  cloudQueueStatus: () => apiFetch('/api/cloud/queue-status'),
-  getNetworkPolicy: () => apiFetch('/api/config/network'),
-  setNetworkPolicy: (body: { policy: 'off' | 'private' | 'subnet'; subnet?: string | null }) =>
-    apiFetch('/api/config/network', {
-      method: 'PUT',
-      body: JSON.stringify(body),
-    }),
-  listBackups: () => apiFetch('/api/backups'),
-  backupStatus: () => apiFetch('/api/backups/status'),
-  saveBackupSettings: (body: {
+  activateLicense: async (_code: string) => ({
+    message: 'Licencias locales deshabilitadas en modo cloud',
+  }),
+  cloudStatus: async () => ({
+    connected: true,
+    mode: 'cloud-native',
+    endpoint: null,
+  }),
+  cloudActivate: async (_body: { token: string; endpoint?: string | null }) => ({
+    message: 'Sin vinculacion local: modo cloud nativo',
+  }),
+  cloudSnapshot: async () => ({
+    queued: false,
+    message: 'Sin cola local en modo cloud nativo',
+  }),
+  cloudQueueStatus: async () => ({
+    summary: { pending: 0, processing: 0, sent: 0, error: 0 },
+    recent_errors: [],
+    last_sent_at: null,
+  }),
+  getNetworkPolicy: async () => ({
+    policy: 'off',
+    subnet: '',
+  }),
+  setNetworkPolicy: async (body: { policy: 'off' | 'private' | 'subnet'; subnet?: string | null }) => ({
+    policy: body?.policy || 'off',
+    subnet: body?.subnet || '',
+    message: 'Politica de red local deshabilitada en cloud',
+  }),
+  listBackups: async () => [],
+  backupStatus: async () => ({
+    scheduler_active: false,
+    last_run_at: null,
+    last_success_at: null,
+    last_filename: null,
+    last_error: null,
+    next_run_at: null,
+    settings: {
+      enabled: false,
+      interval_hours: 0,
+      retention_days: 0,
+      external_dir: '',
+    },
+  }),
+  saveBackupSettings: async (body: {
     enabled?: boolean;
     interval_hours?: number;
     retention_days?: number;
     external_dir?: string;
-  }) =>
-    apiFetch('/api/backups/settings', {
-      method: 'PUT',
-      body: JSON.stringify(body),
-    }),
-  createBackup: () => apiFetch('/api/backups', { method: 'POST' }),
-  restoreBackup: (filename: string) =>
-    apiFetch('/api/backups/restore', {
-      method: 'POST',
-      body: JSON.stringify({ filename }),
-    }),
+  }) => ({
+    scheduler_active: false,
+    settings: {
+      enabled: Boolean(body?.enabled),
+      interval_hours: Number(body?.interval_hours ?? 0),
+      retention_days: Number(body?.retention_days ?? 0),
+      external_dir: body?.external_dir || '',
+    },
+  }),
+  createBackup: async () => ({
+    message: 'Backups de archivos locales no disponibles en cloud',
+    backup: {
+      mirror_error: null,
+    },
+  }),
+  restoreBackup: async (_filename: string) => ({
+    message: 'Restore de archivos locales no disponible en cloud',
+  }),
   descargarBackup: async (filename: string): Promise<Blob> => {
-    const at = getAccessToken();
-    const headers: Record<string, string> = {};
-    if (at) headers['Authorization'] = `Bearer ${at}`;
-    const res = await fetch(
-      apiUrl(`/api/backups/download/${encodeURIComponent(filename)}`),
-      {
-        method: 'GET',
-        headers,
-      }
+    throw new Error(
+      `Backup local no disponible en cloud: ${filename}`
     );
-    if (!res.ok) {
-      let msg = 'No se pudo descargar el backup';
-      try {
-        const data = await res.json();
-        if (data?.error) msg = data.error;
-      } catch (_) {}
-      throw new Error(msg);
-    }
-    return await res.blob();
   },
 
   // Depósitos
@@ -318,10 +363,15 @@ export const Api = {
     destacado_producto_id?: number | null;
     publicado?: boolean;
     price_type?: 'final' | 'distribuidor' | 'mayorista';
+    dominio?: string;
   }) =>
     apiFetch('/api/catalogo/config', {
       method: 'PUT',
       body: JSON.stringify(body),
+    }),
+  emitirCatalogo: () =>
+    apiFetch('/api/catalogo/emitir', {
+      method: 'POST',
     }),
   catalogoPublico: () => apiFetch('/api/catalogo'),
   descargarCatalogoExcel: async (
@@ -377,6 +427,7 @@ export const Api = {
   productos: (params?: {
     q?: string;
     category_id?: number;
+    include_descendants?: boolean;
     limit?: number;
     offset?: number;
     sort?: string;
@@ -385,10 +436,11 @@ export const Api = {
     paginated?: boolean;
     all?: boolean;
   }) => {
-    const p = new URLSearchParams();
-    if (params?.q) p.set('q', params.q);
-    if (params?.category_id != null) p.set('category_id', String(params.category_id));
-    if (params?.limit != null) p.set('limit', String(params.limit));
+      const p = new URLSearchParams();
+      if (params?.q) p.set('q', params.q);
+      if (params?.category_id != null) p.set('category_id', String(params.category_id));
+      if (params?.include_descendants) p.set('include_descendants', '1');
+      if (params?.limit != null) p.set('limit', String(params.limit));
     if (params?.offset != null) p.set('offset', String(params.offset));
     if (params?.sort) p.set('sort', params.sort);
     if (params?.dir) p.set('dir', params.dir);
@@ -417,8 +469,10 @@ export const Api = {
     return apiFetch(`/api/productos/${id}/historial${qs ? `?${qs}` : ''}`);
   },
   categorias: () => apiFetch('/api/categorias'),
+  categoriasTree: () => apiFetch('/api/categorias/tree'),
   crearCategoria: (body: any) => apiFetch('/api/categorias', { method: 'POST', body: JSON.stringify(body) }),
   actualizarCategoria: (id: number, body: any) => apiFetch(`/api/categorias/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  moverCategoria: (id: number, body: any) => apiFetch(`/api/categorias/${id}/move`, { method: 'PATCH', body: JSON.stringify(body) }),
   eliminarCategoria: (id: number) => apiFetch(`/api/categorias/${id}`, { method: 'DELETE' }),
 
   // Inventario
@@ -442,7 +496,18 @@ export const Api = {
     apiFetch('/api/inventario/transferencias', { method: 'POST', body: JSON.stringify(body) }),
 
   // Clientes y proveedores
-  clientes: (arg?: string | { q?: string; estado?: 'activo' | 'inactivo' | 'todos'; limit?: number; offset?: number; all?: boolean }) => {
+  clientes: (
+    arg?:
+      | string
+      | {
+          q?: string;
+          estado?: 'activo' | 'inactivo' | 'todos';
+          limit?: number;
+          offset?: number;
+          all?: boolean;
+          view?: 'mobile' | 'full';
+        }
+  ) => {
     const p = new URLSearchParams();
     if (typeof arg === 'string') {
       if (arg) p.set('q', arg);
@@ -452,6 +517,7 @@ export const Api = {
       if (arg.limit != null) p.set('limit', String(arg.limit));
       if (arg.offset != null) p.set('offset', String(arg.offset));
       if (arg.all) p.set('all', '1');
+      if (arg.view) p.set('view', arg.view);
     }
     const qs = p.toString();
     return apiFetch(`/api/clientes${qs ? `?${qs}` : ''}`);
@@ -491,7 +557,9 @@ export const Api = {
   compraDetalle: (id: number) => apiFetch(`/api/compras/${id}/detalle`),
   crearCompra: (body: any) => apiFetch('/api/compras', { method: 'POST', body: JSON.stringify(body) }),
   recibirCompra: (id: number, body: any = {}) => apiFetch(`/api/compras/${id}/recibir`, { method: 'POST', body: JSON.stringify(body) }),
-  ventas: (f: { cliente_id?: number; limit?: number; offset?: number } = {}) => {
+  ventas: (
+    f: { cliente_id?: number; limit?: number; offset?: number; view?: 'mobile' | 'full' } = {}
+  ) => {
     const qs = new URLSearchParams(
       Object.entries(f)
         .filter(([, v]) => v !== undefined)
@@ -510,6 +578,27 @@ export const Api = {
     }),
   pagos: (f?: { venta_id?: number; cliente_id?: number }) => apiFetch(`/api/pagos${f ? `?${new URLSearchParams(Object.entries(f as any))}` : ''}`),
   crearPago: (body: any) => apiFetch('/api/pagos', { method: 'POST', body: JSON.stringify(body) }),
+
+  // Ofertas internas y comisiones por lista
+  preciosOfertas: (params: { inactivas?: boolean; q?: string; tipo?: string; producto_id?: number; lista_precio_objetivo?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (params.inactivas) p.set('inactivas', '1');
+    if (params.q) p.set('q', params.q);
+    if (params.tipo) p.set('tipo', params.tipo);
+    if (params.producto_id != null) p.set('producto_id', String(params.producto_id));
+    if (params.lista_precio_objetivo) p.set('lista_precio_objetivo', params.lista_precio_objetivo);
+    const qs = p.toString();
+    return apiFetch(`/api/precios/ofertas${qs ? `?${qs}` : ''}`);
+  },
+  crearPrecioOferta: (body: any) =>
+    apiFetch('/api/precios/ofertas', { method: 'POST', body: JSON.stringify(body) }),
+  actualizarPrecioOferta: (id: number, body: any) =>
+    apiFetch(`/api/precios/ofertas/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  getComisionListasConfig: () => apiFetch('/api/precios/comisiones'),
+  setComisionListasConfig: (body: {
+    mode: 'producto' | 'lista';
+    porcentajes?: { local?: number; distribuidor?: number; final?: number; oferta?: number };
+  }) => apiFetch('/api/precios/comisiones', { method: 'PUT', body: JSON.stringify(body) }),
 
   // Metodos de pago
   metodosPago: (opts: { inactivos?: boolean } = {}) => {
@@ -678,12 +767,21 @@ export const Api = {
   },
 
   // Finanzas
-  costosProductos: (params: { desde?: string; hasta?: string; periodo?: string; groupBy?: 'dia' | 'producto' | 'proveedor' | 'categoria' }) => {
+  costosProductos: (params: {
+    desde?: string;
+    hasta?: string;
+    periodo?: string;
+    groupBy?: 'dia' | 'producto' | 'proveedor' | 'categoria';
+    categoria_id?: number;
+    include_descendants?: boolean;
+  }) => {
     const p = new URLSearchParams();
     if (params.desde) p.set('desde', params.desde);
     if (params.hasta) p.set('hasta', params.hasta);
     if (params.periodo) p.set('periodo', params.periodo);
     if (params.groupBy) p.set('groupBy', params.groupBy);
+    if (params.categoria_id != null) p.set('categoria_id', String(params.categoria_id));
+    if (params.include_descendants) p.set('include_descendants', '1');
     const qs = p.toString();
     return apiFetch(`/api/finanzas/costos-productos${qs ? `?${qs}` : ''}`);
   },
@@ -706,7 +804,7 @@ export const Api = {
     const qs = p.toString();
     return apiFetch(`/api/finanzas/ganancia-neta${qs ? `?${qs}` : ''}`);
   },
-  gananciaPorProducto: (params: { desde?: string; hasta?: string; periodo?: string; limit?: number; orderBy?: 'ganancia' | 'ingresos' | 'cantidad' | 'margen'; categoria_id?: number }) => {
+  gananciaPorProducto: (params: { desde?: string; hasta?: string; periodo?: string; limit?: number; orderBy?: 'ganancia' | 'ingresos' | 'cantidad' | 'margen'; categoria_id?: number; include_descendants?: boolean }) => {
     const p = new URLSearchParams();
     if (params.desde) p.set('desde', params.desde);
     if (params.hasta) p.set('hasta', params.hasta);
@@ -714,6 +812,7 @@ export const Api = {
     if (params.limit != null) p.set('limit', String(params.limit));
     if (params.orderBy) p.set('orderBy', params.orderBy);
     if (params.categoria_id != null) p.set('categoria_id', String(params.categoria_id));
+    if (params.include_descendants) p.set('include_descendants', '1');
     const qs = p.toString();
     return apiFetch(`/api/finanzas/ganancia-por-producto${qs ? `?${qs}` : ''}`);
   },
@@ -800,20 +899,23 @@ export const Api = {
   },
 
   // AI
-  aiForecast: (opts: { days?: number; history?: number; limit?: number; category_id?: number } = {}) => {
+  aiForecast: (opts: { days?: number; history?: number; limit?: number; category_id?: number; include_descendants?: boolean } = {}) => {
     const p = new URLSearchParams();
     if (opts.days != null) p.set('days', String(opts.days));
     if (opts.history != null) p.set('history', String(opts.history));
     if (opts.limit != null) p.set('limit', String(opts.limit));
     if (opts.category_id != null) p.set('category_id', String(opts.category_id));
+    if (opts.include_descendants) p.set('include_descendants', '1');
     const qs = p.toString();
     return apiFetch(`/api/ai/forecast${qs ? `?${qs}` : ''}`);
   },
-  aiStockouts: (opts: { days?: number; history?: number; limit?: number; category_id?: number } = {}) => {
+  aiStockouts: (opts: { days?: number; history?: number; limit?: number; category_id?: number; include_descendants?: boolean } = {}) => {
     const p = new URLSearchParams();
     if (opts.days != null) p.set('days', String(opts.days));
     if (opts.history != null) p.set('history', String(opts.history));
     if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.category_id != null) p.set('category_id', String(opts.category_id));
+    if (opts.include_descendants) p.set('include_descendants', '1');
     const qs = p.toString();
     return apiFetch(`/api/ai/stockouts${qs ? `?${qs}` : ''}`);
   },
@@ -873,7 +975,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  aiPredictionsSummary: (body: { days?: number; history?: number; limit?: number; category_id?: number } = {}) =>
+  aiPredictionsSummary: (body: { days?: number; history?: number; limit?: number; category_id?: number; include_descendants?: boolean } = {}) =>
     apiFetch('/api/ai/predictions-summary', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -1040,6 +1142,153 @@ export const Api = {
     apiFetch('/api/config/reset-panel', {
       method: 'POST',
     }),
+  // Centro de mando duenio (Fase 4 y 5)
+  ownerRiskRanking: (opts: { limit?: number; persist?: boolean } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.persist != null) p.set('persist', opts.persist ? '1' : '0');
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/cobranzas/ranking-riesgo${qs ? `?${qs}` : ''}`);
+  },
+  ownerAutoReminders: (body: { limit?: number } = {}) =>
+    apiFetch('/api/duenio/cobranzas/recordatorios/auto', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  ownerReminders: (opts: { status?: string; cliente_id?: number; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.status) p.set('status', opts.status);
+    if (opts.cliente_id != null) p.set('cliente_id', String(opts.cliente_id));
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/cobranzas/recordatorios${qs ? `?${qs}` : ''}`);
+  },
+  ownerCreateReminder: (body: {
+    cliente_id: number;
+    canal?: 'whatsapp' | 'email' | 'manual';
+    destino?: string;
+    template_code?: string;
+    payload?: Record<string, any>;
+    scheduled_at?: string;
+  }) =>
+    apiFetch('/api/duenio/cobranzas/recordatorios', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  ownerPromises: (opts: { estado?: string; cliente_id?: number; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.estado) p.set('estado', opts.estado);
+    if (opts.cliente_id != null) p.set('cliente_id', String(opts.cliente_id));
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/cobranzas/promesas${qs ? `?${qs}` : ''}`);
+  },
+  ownerCreatePromise: (body: {
+    cliente_id: number;
+    monto_prometido: number;
+    fecha_promesa: string;
+    canal_preferido?: 'whatsapp' | 'email' | 'telefono' | 'manual';
+    notas?: string;
+  }) =>
+    apiFetch('/api/duenio/cobranzas/promesas', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  ownerUpdatePromiseStatus: (
+    id: number,
+    body: { estado: 'pendiente' | 'cumplida' | 'incumplida' | 'cancelada'; notas?: string }
+  ) =>
+    apiFetch(`/api/duenio/cobranzas/promesas/${id}/estado`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  ownerMarginsRealtime: (opts: { dimension?: 'producto' | 'vendedor' | 'deposito'; desde?: string; hasta?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.dimension) p.set('dimension', opts.dimension);
+    if (opts.desde) p.set('desde', opts.desde);
+    if (opts.hasta) p.set('hasta', opts.hasta);
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/margenes/tiempo-real${qs ? `?${qs}` : ''}`);
+  },
+  ownerRepricingRules: () => apiFetch('/api/duenio/repricing/reglas'),
+  ownerCreateRepricingRule: (body: any) =>
+    apiFetch('/api/duenio/repricing/reglas', { method: 'POST', body: JSON.stringify(body) }),
+  ownerUpdateRepricingRule: (id: number, body: any) =>
+    apiFetch(`/api/duenio/repricing/reglas/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  ownerRepricingPreview: (body: { product_ids?: number[]; limit?: number } = {}) =>
+    apiFetch('/api/duenio/repricing/preview', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  ownerRepricingApply: (body: { product_ids?: number[]; limit?: number } = {}) =>
+    apiFetch('/api/duenio/repricing/aplicar', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  ownerCommandCenter: (opts: { base_cash?: number; horizons?: string; persist_alerts?: boolean } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.base_cash != null) p.set('base_cash', String(opts.base_cash));
+    if (opts.horizons) p.set('horizons', opts.horizons);
+    if (opts.persist_alerts != null) p.set('persist_alerts', opts.persist_alerts ? '1' : '0');
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/centro-mando${qs ? `?${qs}` : ''}`);
+  },
+  ownerAlerts: (opts: { status?: 'open' | 'dismissed'; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.status) p.set('status', opts.status);
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/alertas${qs ? `?${qs}` : ''}`);
+  },
+  ownerDismissAlert: (id: number) =>
+    apiFetch(`/api/duenio/alertas/${id}/dismiss`, { method: 'POST' }),
+  ownerFiscalRules: () => apiFetch('/api/duenio/fiscal-ar/reglas'),
+  ownerCreateFiscalRule: (body: any) =>
+    apiFetch('/api/duenio/fiscal-ar/reglas', { method: 'POST', body: JSON.stringify(body) }),
+  ownerUpdateFiscalRule: (id: number, body: any) =>
+    apiFetch(`/api/duenio/fiscal-ar/reglas/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  ownerSimulateFiscal: (body: any) =>
+    apiFetch('/api/duenio/fiscal-ar/simular', { method: 'POST', body: JSON.stringify(body) }),
+  ownerPriceLists: () => apiFetch('/api/duenio/listas-precios'),
+  ownerCreatePriceList: (body: any) =>
+    apiFetch('/api/duenio/listas-precios', { method: 'POST', body: JSON.stringify(body) }),
+  ownerUpdatePriceList: (id: number, body: any) =>
+    apiFetch(`/api/duenio/listas-precios/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  ownerPriceListRules: (id: number) => apiFetch(`/api/duenio/listas-precios/${id}/reglas`),
+  ownerCreatePriceListRule: (id: number, body: any) =>
+    apiFetch(`/api/duenio/listas-precios/${id}/reglas`, { method: 'POST', body: JSON.stringify(body) }),
+  ownerUpdatePriceListRule: (ruleId: number, body: any) =>
+    apiFetch(`/api/duenio/listas-precios/reglas/${ruleId}`, { method: 'PUT', body: JSON.stringify(body) }),
+  ownerPreviewPriceList: (id: number, body: { limit?: number } = {}) =>
+    apiFetch(`/api/duenio/listas-precios/${id}/preview`, { method: 'POST', body: JSON.stringify(body) }),
+  ownerChannelIntegrations: () => apiFetch('/api/duenio/integraciones/canales'),
+  ownerUpsertChannelIntegration: (canal: 'mercadolibre' | 'tiendanube' | 'whatsapp_catalog', body: any) =>
+    apiFetch(`/api/duenio/integraciones/canales/${canal}`, { method: 'PUT', body: JSON.stringify(body) }),
+  ownerQueueChannelSync: (canal: 'mercadolibre' | 'tiendanube' | 'whatsapp_catalog', body: any) =>
+    apiFetch(`/api/duenio/integraciones/canales/${canal}/sync`, { method: 'POST', body: JSON.stringify(body) }),
+  ownerChannelJobs: (opts: { status?: 'pending' | 'running' | 'done' | 'failed'; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.status) p.set('status', opts.status);
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    const qs = p.toString();
+    return apiFetch(`/api/duenio/integraciones/jobs${qs ? `?${qs}` : ''}`);
+  },
+  ownerBetaCompanies: () => apiFetch('/api/duenio/beta/empresas'),
+  ownerCreateBetaCompany: (body: any) =>
+    apiFetch('/api/duenio/beta/empresas', { method: 'POST', body: JSON.stringify(body) }),
+  ownerCreateBetaFeedback: (id: number, body: any) =>
+    apiFetch(`/api/duenio/beta/empresas/${id}/feedback`, { method: 'POST', body: JSON.stringify(body) }),
+  ownerBetaMetrics: () => apiFetch('/api/duenio/beta/metricas'),
+  ownerReleaseCycles: () => apiFetch('/api/duenio/release-train/ciclos'),
+  ownerCreateReleaseCycle: (body: any) =>
+    apiFetch('/api/duenio/release-train/ciclos', { method: 'POST', body: JSON.stringify(body) }),
+  ownerAddReleaseEntry: (id: number, body: any) =>
+    apiFetch(`/api/duenio/release-train/ciclos/${id}/entries`, { method: 'POST', body: JSON.stringify(body) }),
+  ownerCloseReleaseCycle: (id: number, body: { changelog_resumen?: string } = {}) =>
+    apiFetch(`/api/duenio/release-train/ciclos/${id}/cerrar`, { method: 'POST', body: JSON.stringify(body) }),
   factoryReset: () =>
     apiFetch('/api/setup/reset-database', {
       method: 'POST',

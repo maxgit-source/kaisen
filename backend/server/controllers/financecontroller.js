@@ -1,4 +1,5 @@
 const { query } = require('../db/pg');
+const categoryRepo = require('../db/repositories/categoryRepository');
 
 // Helpers de fechas: rango [desde, hasta] en formato YYYY-MM-DD
 function parseDate(value) {
@@ -59,15 +60,38 @@ function normalizeTipoPresupuesto(tipo) {
   return '';
 }
 
+async function appendCategoriaFilter(where, params, {
+  categoriaId,
+  includeDescendants = false,
+  column = 'categoria_id',
+} = {}) {
+  if (!categoriaId) return;
+  const ids = await categoryRepo.getCategoryFilterIds(categoriaId, {
+    includeDescendants: Boolean(includeDescendants),
+    onlyActive: true,
+  });
+  if (!ids.length) {
+    where.push('1 = 0');
+    return;
+  }
+  const start = params.length + 1;
+  const marks = ids.map((_, idx) => `$${start + idx}`).join(', ');
+  params.push(...ids);
+  where.push(`${column} IN (${marks})`);
+}
+
 // 1) Costos de productos (vinculado a compras)
 async function costosProductos(req, res) {
   try {
     const { desde, hasta } = getDateRange(req);
-    const { groupBy, producto_id, proveedor_id, categoria_id } = req.query || {};
+    const { groupBy, producto_id, proveedor_id, categoria_id, include_descendants } = req.query || {};
 
     const gb = (groupBy || 'dia').toString().toLowerCase();
     const allowedGroupBy = new Set(['dia', 'producto', 'proveedor', 'categoria']);
     const group = allowedGroupBy.has(gb) ? gb : 'dia';
+    const includeDescendants =
+      String(include_descendants || '').toLowerCase() === '1' ||
+      String(include_descendants || '').toLowerCase() === 'true';
 
     const params = [desde, hasta];
     const where = ["date(fecha, 'localtime') >= date($1)", "date(fecha, 'localtime') <= date($2)"];
@@ -80,10 +104,11 @@ async function costosProductos(req, res) {
       params.push(Number(proveedor_id));
       where.push(`proveedor_id = $${params.length}`);
     }
-    if (categoria_id) {
-      params.push(Number(categoria_id));
-      where.push(`categoria_id = $${params.length}`);
-    }
+    await appendCategoriaFilter(where, params, {
+      categoriaId: categoria_id,
+      includeDescendants,
+      column: 'categoria_id',
+    });
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -541,13 +566,16 @@ async function gananciaNeta(req, res) {
 async function gananciaPorProducto(req, res) {
   try {
     const { desde, hasta } = getDateRange(req);
-    const { limit, orderBy, categoria_id } = req.query || {};
+    const { limit, orderBy, categoria_id, include_descendants } = req.query || {};
 
     const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 500);
     const order = (orderBy || 'ganancia').toString().toLowerCase();
     const allowedOrder = new Set(['ganancia', 'ingresos', 'cantidad', 'margen']);
 
     const orderKey = allowedOrder.has(order) ? order : 'ganancia';
+    const includeDescendants =
+      String(include_descendants || '').toLowerCase() === '1' ||
+      String(include_descendants || '').toLowerCase() === 'true';
 
     const params = [desde, hasta];
     const where = [
@@ -556,10 +584,11 @@ async function gananciaPorProducto(req, res) {
       "date(v.fecha, 'localtime') <= date($2)",
     ];
 
-    if (categoria_id) {
-      params.push(Number(categoria_id));
-      where.push(`p.categoria_id = $${params.length}`);
-    }
+    await appendCategoriaFilter(where, params, {
+      categoriaId: categoria_id,
+      includeDescendants,
+      column: 'p.categoria_id',
+    });
 
     let orderClause = 'ganancia_bruta DESC';
     if (orderKey === 'ingresos') {

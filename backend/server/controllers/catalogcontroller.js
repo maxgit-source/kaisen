@@ -15,6 +15,9 @@ const CONFIG_KEYS = {
   destacadoId: 'catalogo_destacado_producto_id',
   publicado: 'catalogo_publicado',
   priceType: 'catalogo_price_type',
+  slug: 'catalogo_slug',
+  domain: 'catalogo_dominio',
+  publishedAt: 'catalogo_emitido_en',
 };
 
 const PRICE_LABEL_KEYS = {
@@ -62,6 +65,33 @@ function resolvePriceValue(product, priceKey) {
 
 function formatTimestamp(date) {
   return date.toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function normalizeSlug(input) {
+  return String(input || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64);
+}
+
+function normalizeDomain(input) {
+  let raw = String(input || '').trim().toLowerCase();
+  if (!raw) return '';
+  raw = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  raw = raw.replace(/^www\./, '');
+  raw = raw.replace(/[^a-z0-9.-]/g, '').replace(/\.\.+/g, '.');
+  raw = raw.replace(/^\.+|\.+$/g, '');
+  if (!raw.includes('.') || raw.length > 190) return '';
+  return raw;
+}
+
+function buildCatalogPublicUrl(domain) {
+  const normalizedDomain = normalizeDomain(domain);
+  if (!normalizedDomain) return '';
+  return `https://${normalizedDomain}/catalogo`;
 }
 
 function fetchImageBuffer(url, redirectCount = 0) {
@@ -123,13 +153,17 @@ function resolveImageExtension(contentType, url) {
 
 async function getCatalogConfig(req, res) {
   try {
-    const [name, logoUrl, destacadoId, publicado, priceType] = await Promise.all([
+    const [name, logoUrl, destacadoId, publicado, priceType, slug, domain] = await Promise.all([
       configRepo.getTextParam(CONFIG_KEYS.name),
       configRepo.getTextParam(CONFIG_KEYS.logoUrl),
       configRepo.getNumericParam(CONFIG_KEYS.destacadoId),
       configRepo.getNumericParam(CONFIG_KEYS.publicado),
       configRepo.getTextParam(CONFIG_KEYS.priceType),
+      configRepo.getTextParam(CONFIG_KEYS.slug),
+      configRepo.getTextParam(CONFIG_KEYS.domain),
     ]);
+
+    const normalizedDomain = normalizeDomain(domain || '');
 
     res.json({
       nombre: name || '',
@@ -137,6 +171,9 @@ async function getCatalogConfig(req, res) {
       destacado_producto_id: destacadoId != null ? Number(destacadoId) : null,
       publicado: publicado != null ? Number(publicado) === 1 : true,
       price_type: priceType || 'final',
+      slug: normalizeSlug(slug || ''),
+      dominio: normalizedDomain,
+      public_url: buildCatalogPublicUrl(normalizedDomain),
     });
   } catch (e) {
     res.status(500).json({ error: 'No se pudo obtener la configuracion del catalogo' });
@@ -149,13 +186,16 @@ const validateConfig = [
   check('destacado_producto_id').optional().isInt({ gt: 0 }),
   check('publicado').optional().isBoolean(),
   check('price_type').optional().isIn(['final', 'distribuidor', 'mayorista']),
+  check('slug').optional().isString().isLength({ max: 64 }),
+  check('dominio').optional().isString().isLength({ max: 255 }),
 ];
 
 async function updateCatalogConfig(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  const { nombre, logo_url, destacado_producto_id, publicado, price_type } = req.body || {};
+  const { nombre, logo_url, destacado_producto_id, publicado, price_type, slug, dominio } =
+    req.body || {};
   const usuarioId =
     req.user?.sub && Number.isFinite(Number(req.user.sub)) ? Number(req.user.sub) : null;
 
@@ -186,6 +226,20 @@ async function updateCatalogConfig(req, res) {
       const normalized = String(price_type || '').toLowerCase();
       await configRepo.setTextParam(CONFIG_KEYS.priceType, normalized || 'final', usuarioId);
     }
+    if (typeof slug !== 'undefined') {
+      const normalizedSlug = normalizeSlug(slug);
+      if (!normalizedSlug) {
+        return res.status(400).json({ error: 'Slug invalido' });
+      }
+      await configRepo.setTextParam(CONFIG_KEYS.slug, normalizedSlug, usuarioId);
+    }
+    if (typeof dominio !== 'undefined') {
+      const normalizedDomain = normalizeDomain(dominio);
+      if (dominio && !normalizedDomain) {
+        return res.status(400).json({ error: 'Dominio invalido' });
+      }
+      await configRepo.setTextParam(CONFIG_KEYS.domain, normalizedDomain || '', usuarioId);
+    }
     await catalogSync.enqueueCatalogConfig(usuarioId);
     return getCatalogConfig(req, res);
   } catch (e) {
@@ -193,37 +247,110 @@ async function updateCatalogConfig(req, res) {
   }
 }
 
-async function getCatalogPublic(req, res) {
-  try {
-    const [config, categorias, productos, priceType] = await Promise.all([
+async function buildCatalogPublicData() {
+  const [configName, categorias, productos, priceType, logoUrl, destacadoId, publicado, slug, domain] =
+    await Promise.all([
       configRepo.getTextParam(CONFIG_KEYS.name),
       categoryRepo.getAllActive(),
       productRepo.listCatalog(),
       configRepo.getTextParam(CONFIG_KEYS.priceType),
-    ]);
-    const [logoUrl, destacadoId] = await Promise.all([
       configRepo.getTextParam(CONFIG_KEYS.logoUrl),
       configRepo.getNumericParam(CONFIG_KEYS.destacadoId),
+      configRepo.getNumericParam(CONFIG_KEYS.publicado),
+      configRepo.getTextParam(CONFIG_KEYS.slug),
+      configRepo.getTextParam(CONFIG_KEYS.domain),
     ]);
 
-    let destacado = null;
-    if (destacadoId) {
-      destacado = await productRepo.findById(Number(destacadoId));
-    }
+  const normalizedDomain = normalizeDomain(domain || '');
 
-    res.json({
+  let destacado = null;
+  if (destacadoId) {
+    destacado = await productRepo.findById(Number(destacadoId));
+  }
+
+  return {
+    publicado: publicado != null ? Number(publicado) === 1 : true,
+    slug: normalizeSlug(slug || ''),
+    payload: {
       config: {
-        nombre: config || '',
+        nombre: configName || '',
         logo_url: logoUrl || '',
         destacado_producto_id: destacadoId != null ? Number(destacadoId) : null,
         price_type: priceType || 'final',
+        slug: normalizeSlug(slug || ''),
+        dominio: normalizedDomain,
+        public_url: buildCatalogPublicUrl(normalizedDomain),
       },
       destacado,
       categorias,
       productos,
+    },
+  };
+}
+
+async function emitCatalog(req, res) {
+  const usuarioId =
+    req.user?.sub && Number.isFinite(Number(req.user.sub)) ? Number(req.user.sub) : null;
+  try {
+    const [domain, slug] = await Promise.all([
+      configRepo.getTextParam(CONFIG_KEYS.domain),
+      configRepo.getTextParam(CONFIG_KEYS.slug),
+    ]);
+    const normalizedDomain = normalizeDomain(domain || '');
+    if (!normalizedDomain) {
+      return res
+        .status(400)
+        .json({ error: 'Configura un dominio para emitir el catalogo' });
+    }
+
+    const emittedAt = new Date().toISOString();
+    await Promise.all([
+      configRepo.setNumericParam(CONFIG_KEYS.publicado, 1, usuarioId),
+      configRepo.setTextParam(CONFIG_KEYS.publishedAt, emittedAt, usuarioId),
+      catalogSync.enqueueCatalogConfig(usuarioId),
+    ]);
+
+    return res.json({
+      ok: true,
+      message: 'Catalogo emitido correctamente',
+      url: buildCatalogPublicUrl(normalizedDomain),
+      dominio: normalizedDomain,
+      slug: normalizeSlug(slug || ''),
+      emitted_at: emittedAt,
     });
   } catch (e) {
-    res.status(500).json({ error: 'No se pudo obtener el catalogo' });
+    return res.status(500).json({ error: 'No se pudo emitir el catalogo' });
+  }
+}
+
+async function getCatalogPublic(req, res) {
+  try {
+    const data = await buildCatalogPublicData();
+    if (!data.publicado) {
+      return res.status(404).json({ error: 'Catalogo no publicado' });
+    }
+    return res.json(data.payload);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo obtener el catalogo' });
+  }
+}
+
+async function getCatalogPublicBySlug(req, res) {
+  try {
+    const requested = normalizeSlug(req.params?.slug || '');
+    if (!requested) {
+      return res.status(400).json({ error: 'Slug invalido' });
+    }
+    const data = await buildCatalogPublicData();
+    if (!data.publicado) {
+      return res.status(404).json({ error: 'Catalogo no publicado' });
+    }
+    if (!data.slug || data.slug !== requested) {
+      return res.status(404).json({ error: 'Catalogo no encontrado' });
+    }
+    return res.json(data.payload);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo obtener el catalogo' });
   }
 }
 
@@ -386,6 +513,8 @@ async function exportCatalogExcel(req, res) {
 module.exports = {
   getCatalogConfig,
   updateCatalogConfig: [...validateConfig, updateCatalogConfig],
+  emitCatalog,
   getCatalogPublic,
+  getCatalogPublicBySlug,
   exportCatalogExcel,
 };

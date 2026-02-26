@@ -1,9 +1,27 @@
 const { query, withTransaction } = require('../../db/pg');
 const configRepo = require('./configRepository');
+const categoryRepo = require('./categoryRepository');
 const inv = require('../../services/inventoryService');
 const catalogSync = require('../../services/catalogSyncService');
 
-async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', dir = 'desc' } = {}) {
+function appendInFilter(where, params, column, ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const start = params.length + 1;
+  const marks = ids.map((_, idx) => `$${start + idx}`).join(', ');
+  params.push(...ids);
+  where.push(`${column} IN (${marks})`);
+}
+
+async function listProducts({
+  q,
+  categoryId,
+  includeDescendants = false,
+  page = 1,
+  limit = 50,
+  offset = 0,
+  sort = 'id',
+  dir = 'desc',
+} = {}) {
   const params = [];
   const where = ['p.activo = TRUE', 'c.activo = TRUE'];
   if (q) {
@@ -11,8 +29,12 @@ async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', 
     where.push(`(LOWER(p.nombre) LIKE $${params.length} OR LOWER(p.descripcion) LIKE $${params.length} OR LOWER(p.codigo) LIKE $${params.length})`);
   }
   if (categoryId) {
-    params.push(Number(categoryId));
-    where.push(`p.categoria_id = $${params.length}`);
+    const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
+      includeDescendants: Boolean(includeDescendants),
+      onlyActive: true,
+    });
+    if (!ids.length) return [];
+    appendInFilter(where, params, 'p.categoria_id', ids);
   }
 
   const sortMap = {
@@ -58,6 +80,7 @@ async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', 
            p.camara_mp,
            p.bateria_mah,
            c.nombre AS category_name,
+           c.path AS category_path,
            COALESCE(i.cantidad_disponible, 0) AS stock_quantity,
            p.creado_en AS created_at,
            p.actualizado_en AS updated_at,
@@ -97,6 +120,7 @@ async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', 
            p.camara_mp,
            p.bateria_mah,
            c.nombre AS category_name,
+           c.path AS category_path,
            COALESCE(i.cantidad_disponible, 0) AS stock_quantity,
            p.creado_en AS created_at,
            p.actualizado_en AS updated_at,
@@ -115,7 +139,16 @@ async function listProducts({ q, categoryId, page = 1, limit = 50, sort = 'id', 
   return rows;
 }
 
-async function listProductsPaginated({ q, categoryId, page = 1, limit = 50, sort = 'id', dir = 'desc', allowAll = false } = {}) {
+async function listProductsPaginated({
+  q,
+  categoryId,
+  includeDescendants = false,
+  page = 1,
+  limit = 50,
+  sort = 'id',
+  dir = 'desc',
+  allowAll = false,
+} = {}) {
   const params = [];
   const where = ['p.activo = TRUE', 'c.activo = TRUE'];
   if (q) {
@@ -125,8 +158,16 @@ async function listProductsPaginated({ q, categoryId, page = 1, limit = 50, sort
     );
   }
   if (categoryId) {
-    params.push(Number(categoryId));
-    where.push(`p.categoria_id = $${params.length}`);
+    const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
+      includeDescendants: Boolean(includeDescendants),
+      onlyActive: true,
+    });
+    if (!ids.length) {
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), allowAll ? 10000 : 200);
+      return { rows: [], total: 0, page: pageNum, limit: lim };
+    }
+    appendInFilter(where, params, 'p.categoria_id', ids);
   }
 
   const sortMap = {
@@ -176,6 +217,7 @@ async function listProductsPaginated({ q, categoryId, page = 1, limit = 50, sort
            p.camara_mp,
            p.bateria_mah,
            c.nombre AS category_name,
+           c.path AS category_path,
            COALESCE(i.cantidad_disponible, 0) AS stock_quantity,
            p.creado_en AS created_at,
            p.actualizado_en AS updated_at,
@@ -406,16 +448,17 @@ async function createProduct({
     await client.query(
       `INSERT INTO inventario_depositos(producto_id, deposito_id, cantidad_disponible, cantidad_reservada)
        VALUES ($1, $2, $3, 0)
-       ON CONFLICT (producto_id, deposito_id)
-       DO UPDATE SET cantidad_disponible = EXCLUDED.cantidad_disponible,
-                     actualizado_en = NOW()`,
+       ON DUPLICATE KEY UPDATE
+         cantidad_disponible = $3,
+         actualizado_en = NOW()`,
       [productoId, defaultDepId, stock]
     );
     if (image_url) {
       await client.query(
         `INSERT INTO producto_imagenes(producto_id, url, orden)
          VALUES ($1, $2, 0)
-         ON CONFLICT (producto_id, orden) DO UPDATE SET url = EXCLUDED.url`,
+         ON DUPLICATE KEY UPDATE
+           url = $2`,
         [productoId, image_url]
       );
     }
@@ -679,9 +722,9 @@ async function updateProduct(
       await client.query(
         `INSERT INTO inventario_depositos(producto_id, deposito_id, cantidad_disponible, cantidad_reservada)
          VALUES ($1, $2, $3, 0)
-         ON CONFLICT (producto_id, deposito_id)
-         DO UPDATE SET cantidad_disponible = EXCLUDED.cantidad_disponible,
-                       actualizado_en = NOW()`,
+         ON DUPLICATE KEY UPDATE
+           cantidad_disponible = $3,
+           actualizado_en = NOW()`,
         [id, defaultDepId, stockQty]
       );
     }
@@ -690,7 +733,8 @@ async function updateProduct(
         await client.query(
           `INSERT INTO producto_imagenes(producto_id, url, orden)
            VALUES ($1, $2, 0)
-           ON CONFLICT (producto_id, orden) DO UPDATE SET url = EXCLUDED.url`,
+           ON DUPLICATE KEY UPDATE
+             url = $2`,
           [id, image_url]
         );
       } else {
@@ -725,10 +769,11 @@ async function listCatalog() {
             p.ram_gb,
             p.almacenamiento_gb,
             p.pantalla_pulgadas,
-            p.camara_mp,
-            p.bateria_mah,
-            c.nombre AS category_name,
-            (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
+             p.camara_mp,
+             p.bateria_mah,
+             c.nombre AS category_name,
+             c.path AS category_path,
+             (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
        FROM productos p
        JOIN categorias c ON c.id = p.categoria_id
       WHERE p.activo = TRUE
@@ -749,10 +794,11 @@ async function listCatalogExport() {
            p.precio_local::float AS price_local,
            p.precio_distribuidor::float AS price_distribuidor,
            p.comision_pct::float AS comision_pct,
-           p.precio_modo AS precio_modo,
-           p.precio_final::float AS precio_final,
-            c.nombre AS category_name,
-            (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
+             p.precio_modo AS precio_modo,
+             p.precio_final::float AS precio_final,
+             c.nombre AS category_name,
+             c.path AS category_path,
+             (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
        FROM productos p
        JOIN categorias c ON c.id = p.categoria_id
       WHERE p.activo = TRUE
@@ -780,10 +826,11 @@ async function findById(id) {
             p.ram_gb,
             p.almacenamiento_gb,
             p.pantalla_pulgadas,
-            p.camara_mp,
-            p.bateria_mah,
-            c.nombre AS category_name,
-            (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
+             p.camara_mp,
+             p.bateria_mah,
+             c.nombre AS category_name,
+             c.path AS category_path,
+             (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
        FROM productos p
        JOIN categorias c ON c.id = p.categoria_id
       WHERE p.id = $1
@@ -820,9 +867,10 @@ async function findByCodigo(codigo) {
             p.almacenamiento_gb,
             p.pantalla_pulgadas,
             p.camara_mp,
-            p.bateria_mah,
-            c.nombre AS category_name,
-            COALESCE(i.cantidad_disponible, 0) AS stock_quantity,
+             p.bateria_mah,
+             c.nombre AS category_name,
+             c.path AS category_path,
+             COALESCE(i.cantidad_disponible, 0) AS stock_quantity,
             (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
        FROM productos p
        JOIN categorias c ON c.id = p.categoria_id

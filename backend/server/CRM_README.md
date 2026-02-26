@@ -1,8 +1,15 @@
-CRM y Postventa (Fase 2)
+CRM y Postventa
 
-Migración
-- Ejecutar `npm run migrate` en `backend/server` para aplicar `V2__crm_postventa.sql`.
-  - Requiere haber aplicado previamente `backend/database/schema.sql` (por la funciÃ³n `trg_set_updated_at`).
+Migracion
+- Ejecutar `npm run migrate` en `backend/server`.
+- En la implementacion actual, las tablas base de CRM/Postventa se crean desde
+  `backend/database/migrations_mysql/V1__core_cloud.sql`:
+  - `crm_oportunidades`
+  - `crm_actividades`
+  - `tickets`
+  - `ticket_eventos`
+- No se requiere `backend/database/schema.sql` ni existe una migracion
+  `V2__crm_postventa.sql` en este proyecto.
 
 Endpoints CRM
 - GET `/api/crm/oportunidades` Lista con filtros: `q`, `fase`, `cliente_id`, `owner_id`, `limit`, `offset`.
@@ -15,11 +22,10 @@ Endpoints CRM
 Endpoints Tickets (Postventa)
 - GET `/api/tickets` Lista con filtros: `q`, `estado`, `prioridad`, `cliente_id`, `limit`, `offset`.
 - POST `/api/tickets` Crea ticket.
-- PUT `/api/tickets/:id` Actualiza ticket (estado, prioridad, asignación, etc.).
+- PUT `/api/tickets/:id` Actualiza ticket (estado, prioridad, asignacion, etc.).
 - GET `/api/tickets/:id/eventos` Historial de eventos.
 - POST `/api/tickets/:id/eventos` Agrega evento. Para `tipo=cambio_estado` se puede enviar `detalle="nuevo_estado:<estado>"`.
 
 Auth y roles
 - Todas las rutas requieren JWT (`auth`).
 - Crear/actualizar requiere rol `admin|gerente|vendedor` (ajustable en `routes/*`).
-

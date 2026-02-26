@@ -1,6 +1,5 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const licenseService = require('../services/licenseService');
 const jwtBlacklistRepo = require('../db/repositories/jwtBlacklistRepository');
 
 // Claves y parametros JWT, desde variables de entorno
@@ -43,6 +42,24 @@ function isBlacklistedLocal(token) {
     return false;
   }
   return true;
+}
+
+function normalizeReqPath(req) {
+  const fromPath = String(req?.path || '').trim();
+  if (fromPath.startsWith('/api/')) return fromPath;
+  if (fromPath.startsWith('/')) return `/api${fromPath}`;
+  const fromOriginal = String(req?.originalUrl || '').split('?')[0].trim();
+  if (fromOriginal.startsWith('/')) return fromOriginal;
+  return '/';
+}
+
+function isFleteroAllowedRequest(req) {
+  const method = String(req?.method || 'GET').toUpperCase();
+  const path = normalizeReqPath(req);
+  if (method === 'POST' && path === '/api/logout') return true;
+  if (method === 'GET' && (path === '/api/ventas' || path === '/api/ventas/')) return true;
+  if (method === 'GET' && /^\/api\/reportes\/remito\/\d+\.pdf$/.test(path)) return true;
+  return false;
 }
 
 /**
@@ -88,17 +105,8 @@ async function authMiddleware(req, res, next) {
     if (user && user.role === 'cliente') {
       return res.status(403).json({ error: 'Token de cliente no autorizado' });
     }
-    let demoExpired = false;
-    try {
-      demoExpired = await licenseService.isDemoExpired();
-    } catch (licenseErr) {
-      console.error('Error validando licencia demo:', licenseErr?.message || licenseErr);
-      return res.status(500).json({ error: 'No se pudo validar la licencia' });
-    }
-    if (demoExpired) {
-      return res.status(403).json({
-        error: 'Tiempo de demo vencido. Consultar con el proveedor para conseguir el programa completo.',
-      });
+    if (user && user.role === 'fletero' && !isFleteroAllowedRequest(req)) {
+      return res.status(403).json({ error: 'Perfil fletero sin permisos para este recurso' });
     }
     req.user = user; // Adjuntar info del usuario a la solicitud
     req.token = token; // Adjuntar el token actual para posible invalidacion

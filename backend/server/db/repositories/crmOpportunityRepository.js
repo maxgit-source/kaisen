@@ -106,25 +106,25 @@ async function analytics() {
                 SELECT 'lead' AS de, 'contacto' AS a,
                        SUM(CASE WHEN lead_at IS NOT NULL THEN 1 ELSE 0 END) AS total_desde,
                        SUM(CASE WHEN lead_at IS NOT NULL AND contacto_at IS NOT NULL THEN 1 ELSE 0 END) AS total_hasta,
-                       AVG(CASE WHEN lead_at IS NOT NULL AND contacto_at IS NOT NULL THEN (julianday(contacto_at) - julianday(lead_at)) END) AS dias_promedio
+                       AVG(CASE WHEN lead_at IS NOT NULL AND contacto_at IS NOT NULL THEN DATEDIFF(contacto_at, lead_at) END) AS dias_promedio
                   FROM trans
                 UNION ALL
                 SELECT 'contacto','propuesta',
                        SUM(CASE WHEN contacto_at IS NOT NULL THEN 1 ELSE 0 END),
                        SUM(CASE WHEN contacto_at IS NOT NULL AND propuesta_at IS NOT NULL THEN 1 ELSE 0 END),
-                       AVG(CASE WHEN contacto_at IS NOT NULL AND propuesta_at IS NOT NULL THEN (julianday(propuesta_at) - julianday(contacto_at)) END)
+                       AVG(CASE WHEN contacto_at IS NOT NULL AND propuesta_at IS NOT NULL THEN DATEDIFF(propuesta_at, contacto_at) END)
                   FROM trans
                 UNION ALL
                 SELECT 'propuesta','negociacion',
                        SUM(CASE WHEN propuesta_at IS NOT NULL THEN 1 ELSE 0 END),
                        SUM(CASE WHEN propuesta_at IS NOT NULL AND negociacion_at IS NOT NULL THEN 1 ELSE 0 END),
-                       AVG(CASE WHEN propuesta_at IS NOT NULL AND negociacion_at IS NOT NULL THEN (julianday(negociacion_at) - julianday(propuesta_at)) END)
+                       AVG(CASE WHEN propuesta_at IS NOT NULL AND negociacion_at IS NOT NULL THEN DATEDIFF(negociacion_at, propuesta_at) END)
                   FROM trans
                 UNION ALL
                 SELECT 'negociacion','ganado',
                        SUM(CASE WHEN negociacion_at IS NOT NULL THEN 1 ELSE 0 END),
                        SUM(CASE WHEN negociacion_at IS NOT NULL AND ganado_at IS NOT NULL THEN 1 ELSE 0 END),
-                       AVG(CASE WHEN negociacion_at IS NOT NULL AND ganado_at IS NOT NULL THEN (julianday(ganado_at) - julianday(negociacion_at)) END)
+                       AVG(CASE WHEN negociacion_at IS NOT NULL AND ganado_at IS NOT NULL THEN DATEDIFF(ganado_at, negociacion_at) END)
                   FROM trans`;
   const [fasesRes, convRes] = await Promise.all([
     query(fasesSql, []),

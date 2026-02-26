@@ -24,6 +24,8 @@ import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
 import { useLicense } from '../context/LicenseContext';
 import { hasFeature } from '../lib/features';
+import { useMediaQuery } from '../lib/useMediaQuery';
+import { trackMobileEvent } from '../lib/mobileTelemetry';
 
 type PeriodKey = '7d' | '30d' | '90d' | 'custom';
 type AggKey = 'dia' | 'mes';
@@ -238,6 +240,7 @@ function downloadBlob(filename: string, blob: Blob) {
 
 export default function Informes() {
   const { accessToken } = useAuth();
+  const isMobile = useMediaQuery('(max-width: 767px)');
   const { status: licenseStatus } = useLicense();
   const aiEnabled = hasFeature(licenseStatus, 'ai');
   const isAdmin = useMemo(() => getRoleFromToken(accessToken) === 'admin', [accessToken]);
@@ -596,6 +599,7 @@ export default function Informes() {
     if (!range) return;
     setExcelError(null);
     setExcelLoading(true);
+    const startedAt = Date.now();
     try {
       const remitoBase = buildRemitoBase();
       const blob = await Api.descargarMovimientosExcel({
@@ -609,8 +613,23 @@ export default function Informes() {
           ? `movimientos-${range.desde}.xlsx`
           : `movimientos-${range.desde}-a-${range.hasta}.xlsx`;
       downloadBlob(name, blob);
+      if (isMobile) {
+        trackMobileEvent('informes_excel_descargado', {
+          desde: range.desde,
+          hasta: range.hasta,
+          duration_ms: Date.now() - startedAt,
+        });
+      }
     } catch (e: any) {
       setExcelError(e?.message || 'No se pudo descargar el excel de movimientos');
+      if (isMobile) {
+        trackMobileEvent('informes_excel_error', {
+          desde: range.desde,
+          hasta: range.hasta,
+          message: e?.message || 'No se pudo descargar el excel de movimientos',
+          duration_ms: Date.now() - startedAt,
+        });
+      }
     } finally {
       setExcelLoading(false);
     }
@@ -1087,74 +1106,125 @@ export default function Informes() {
           )}
         </div>
         <div className="mt-4">
-          <DataTable
-            headers={
-              <thead className="text-left text-slate-400">
-                <tr>
-                  <th className="py-2 px-2">Mes</th>
-                  <th className="py-2 px-2 text-right">Ventas</th>
-                  <th className="py-2 px-2 text-right">Gastos</th>
-                  <th className="py-2 px-2 text-right">Ganancia neta</th>
-                </tr>
-              </thead>
-            }
-          >
-            <tbody className="text-slate-200">
+          {isMobile ? (
+            <div className="space-y-2">
               {gananciasMensuales.map((r) => (
-                <tr key={r.mes} className="border-t border-white/10">
-                  <td className="py-2 px-2">
+                <article key={r.mes} className="app-panel p-3 text-xs space-y-2">
+                  <div className="text-slate-100 font-medium">
                     {new Date(r.mes).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
-                  </td>
-                  <td className="py-2 px-2 text-right">${r.total_ventas.toFixed(0)}</td>
-                  <td className="py-2 px-2 text-right">${r.total_gastos.toFixed(0)}</td>
-                  <td className="py-2 px-2 text-right">${r.ganancia_neta.toFixed(0)}</td>
-                </tr>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <div className="text-slate-400">Ventas</div>
+                      <div className="text-slate-100">${r.total_ventas.toFixed(0)}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Gastos</div>
+                      <div className="text-slate-100">${r.total_gastos.toFixed(0)}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Neto</div>
+                      <div className="text-slate-100">${r.ganancia_neta.toFixed(0)}</div>
+                    </div>
+                  </div>
+                </article>
               ))}
               {!gananciasMensuales.length && (
-                <tr>
-                  <td className="py-2 px-2 text-slate-400" colSpan={4}>
-                    Sin registros
-                  </td>
-                </tr>
+                <div className="app-panel p-3 text-xs text-slate-400">Sin registros</div>
               )}
-            </tbody>
-          </DataTable>
+            </div>
+          ) : (
+            <DataTable
+              headers={
+                <thead className="text-left text-slate-400">
+                  <tr>
+                    <th className="py-2 px-2">Mes</th>
+                    <th className="py-2 px-2 text-right">Ventas</th>
+                    <th className="py-2 px-2 text-right">Gastos</th>
+                    <th className="py-2 px-2 text-right">Ganancia neta</th>
+                  </tr>
+                </thead>
+              }
+            >
+              <tbody className="text-slate-200">
+                {gananciasMensuales.map((r) => (
+                  <tr key={r.mes} className="border-t border-white/10">
+                    <td className="py-2 px-2">
+                      {new Date(r.mes).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
+                    </td>
+                    <td className="py-2 px-2 text-right">${r.total_ventas.toFixed(0)}</td>
+                    <td className="py-2 px-2 text-right">${r.total_gastos.toFixed(0)}</td>
+                    <td className="py-2 px-2 text-right">${r.ganancia_neta.toFixed(0)}</td>
+                  </tr>
+                ))}
+                {!gananciasMensuales.length && (
+                  <tr>
+                    <td className="py-2 px-2 text-slate-400" colSpan={4}>
+                      Sin registros
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </DataTable>
+          )}
         </div>
       </ChartCard>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <ChartCard title="Stock bajo">
           {stockError && <Alert kind="error" message={stockError} />}
-          <DataTable
-            headers={
-              <thead className="text-left text-slate-400">
-                <tr>
-                  <th className="py-2 px-2">Codigo</th>
-                  <th className="py-2 px-2">Producto</th>
-                  <th className="py-2 px-2 text-right">Disponible</th>
-                  <th className="py-2 px-2 text-right">Minimo</th>
-                </tr>
-              </thead>
-            }
-          >
-            <tbody className="text-slate-200">
+          {isMobile ? (
+            <div className="space-y-2">
               {stockBajo.map((r) => (
-                <tr key={r.producto_id} className="border-t border-white/10">
-                  <td className="py-2 px-2">{r.codigo}</td>
-                  <td className="py-2 px-2">{r.nombre}</td>
-                  <td className="py-2 px-2 text-right">{r.cantidad_disponible}</td>
-                  <td className="py-2 px-2 text-right">{r.stock_minimo}</td>
-                </tr>
+                <article key={r.producto_id} className="app-panel p-3 text-xs space-y-1">
+                  <div className="text-slate-100 font-medium">{r.nombre}</div>
+                  <div className="text-slate-400">Codigo: {r.codigo || '-'}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-slate-400">Disponible</div>
+                      <div className="text-slate-100">{r.cantidad_disponible}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Minimo</div>
+                      <div className="text-slate-100">{r.stock_minimo}</div>
+                    </div>
+                  </div>
+                </article>
               ))}
-              {!stockBajo.length && (
-                <tr>
-                  <td className="py-2 px-2 text-slate-400" colSpan={4}>
-                    Sin alertas de stock
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </DataTable>
+              {!stockBajo.length && <div className="app-panel p-3 text-xs text-slate-400">Sin alertas de stock</div>}
+            </div>
+          ) : (
+            <DataTable
+              headers={
+                <thead className="text-left text-slate-400">
+                  <tr>
+                    <th className="py-2 px-2">Codigo</th>
+                    <th className="py-2 px-2">Producto</th>
+                    <th className="py-2 px-2 text-right">Disponible</th>
+                    <th className="py-2 px-2 text-right">Minimo</th>
+                  </tr>
+                </thead>
+              }
+            >
+              <tbody className="text-slate-200">
+                {stockBajo.map((r) => (
+                  <tr key={r.producto_id} className="border-t border-white/10">
+                    <td className="py-2 px-2">{r.codigo}</td>
+                    <td className="py-2 px-2">{r.nombre}</td>
+                    <td className="py-2 px-2 text-right">{r.cantidad_disponible}</td>
+                    <td className="py-2 px-2 text-right">{r.stock_minimo}</td>
+                  </tr>
+                ))}
+                {!stockBajo.length && (
+                  <tr>
+                    <td className="py-2 px-2 text-slate-400" colSpan={4}>
+                      Sin alertas de stock
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </DataTable>
+          )}
         </ChartCard>
 
         <ChartCard title="Top clientes y productos">
@@ -1174,73 +1244,129 @@ export default function Informes() {
             </select>
           </div>
           {topProdError && <Alert kind="error" message={topProdError} />}
-          <DataTable
-            headers={
-              <thead className="text-left text-slate-400">
-                <tr>
-                  <th className="py-2 px-2">Producto</th>
-                  <th className="py-2 px-2 text-right">Unidades</th>
-                  <th className="py-2 px-2 text-right">Monto</th>
-                </tr>
-              </thead>
-            }
-          >
-            <tbody className="text-slate-200">
+          {isMobile ? (
+            <div className="space-y-2">
               {topProductosCliente.map((r) => (
-                <tr key={r.producto_id} className="border-t border-white/10">
-                  <td className="py-2 px-2">{r.producto_nombre}</td>
-                  <td className="py-2 px-2 text-right">{r.total_cantidad}</td>
-                  <td className="py-2 px-2 text-right">${Number(r.total_monto || 0).toFixed(0)}</td>
-                </tr>
+                <article key={r.producto_id} className="app-panel p-3 text-xs">
+                  <div className="text-slate-100 font-medium">{r.producto_nombre}</div>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-slate-400">Unidades</div>
+                      <div className="text-slate-100">{r.total_cantidad}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Monto</div>
+                      <div className="text-slate-100">${Number(r.total_monto || 0).toFixed(0)}</div>
+                    </div>
+                  </div>
+                </article>
               ))}
               {!topProductosCliente.length && (
-                <tr>
-                  <td className="py-2 px-2 text-slate-400" colSpan={3}>
-                    Sin datos de productos
-                  </td>
-                </tr>
+                <div className="app-panel p-3 text-xs text-slate-400">Sin datos de productos</div>
               )}
-            </tbody>
-          </DataTable>
+            </div>
+          ) : (
+            <DataTable
+              headers={
+                <thead className="text-left text-slate-400">
+                  <tr>
+                    <th className="py-2 px-2">Producto</th>
+                    <th className="py-2 px-2 text-right">Unidades</th>
+                    <th className="py-2 px-2 text-right">Monto</th>
+                  </tr>
+                </thead>
+              }
+            >
+              <tbody className="text-slate-200">
+                {topProductosCliente.map((r) => (
+                  <tr key={r.producto_id} className="border-t border-white/10">
+                    <td className="py-2 px-2">{r.producto_nombre}</td>
+                    <td className="py-2 px-2 text-right">{r.total_cantidad}</td>
+                    <td className="py-2 px-2 text-right">${Number(r.total_monto || 0).toFixed(0)}</td>
+                  </tr>
+                ))}
+                {!topProductosCliente.length && (
+                  <tr>
+                    <td className="py-2 px-2 text-slate-400" colSpan={3}>
+                      Sin datos de productos
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </DataTable>
+          )}
         </ChartCard>
       </div>
 
       <ChartCard title="Deudas por cliente">
         {deudasError && <Alert kind="error" message={deudasError} />}
-        <DataTable
-          headers={
-            <thead className="text-left text-slate-400">
-              <tr>
-                <th className="py-2 px-2">Cliente ID</th>
-                <th className="py-2 px-2 text-right">Deuda</th>
-                <th className="py-2 px-2 text-right">0-30</th>
-                <th className="py-2 px-2 text-right">31-60</th>
-                <th className="py-2 px-2 text-right">61-90</th>
-                <th className="py-2 px-2 text-right">+90</th>
-              </tr>
-            </thead>
-          }
-        >
-          <tbody className="text-slate-200">
+        {isMobile ? (
+          <div className="space-y-2">
             {deudas.slice(0, 20).map((r) => (
-              <tr key={r.cliente_id} className="border-t border-white/10">
-                <td className="py-2 px-2">{r.cliente_id}</td>
-                <td className="py-2 px-2 text-right">${Number(r.deuda_pendiente || 0).toFixed(0)}</td>
-                <td className="py-2 px-2 text-right">${Number(r.deuda_0_30 || 0).toFixed(0)}</td>
-                <td className="py-2 px-2 text-right">${Number(r.deuda_31_60 || 0).toFixed(0)}</td>
-                <td className="py-2 px-2 text-right">${Number(r.deuda_61_90 || 0).toFixed(0)}</td>
-                <td className="py-2 px-2 text-right">${Number(r.deuda_mas_90 || 0).toFixed(0)}</td>
-              </tr>
+              <article key={r.cliente_id} className="app-panel p-3 text-xs space-y-2">
+                <div className="text-slate-100 font-medium">Cliente #{r.cliente_id}</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <div className="text-slate-400">Deuda</div>
+                    <div className="text-slate-100">${Number(r.deuda_pendiente || 0).toFixed(0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">0-30</div>
+                    <div className="text-slate-100">${Number(r.deuda_0_30 || 0).toFixed(0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">31-60</div>
+                    <div className="text-slate-100">${Number(r.deuda_31_60 || 0).toFixed(0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">61-90</div>
+                    <div className="text-slate-100">${Number(r.deuda_61_90 || 0).toFixed(0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">+90</div>
+                    <div className="text-slate-100">${Number(r.deuda_mas_90 || 0).toFixed(0)}</div>
+                  </div>
+                </div>
+              </article>
             ))}
-            {!deudas.length && (
-              <tr>
-                <td className="py-2 px-2 text-slate-400" colSpan={6}>
-                  Sin registros de deuda
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </DataTable>
+            {!deudas.length && <div className="app-panel p-3 text-xs text-slate-400">Sin registros de deuda</div>}
+          </div>
+        ) : (
+          <DataTable
+            headers={
+              <thead className="text-left text-slate-400">
+                <tr>
+                  <th className="py-2 px-2">Cliente ID</th>
+                  <th className="py-2 px-2 text-right">Deuda</th>
+                  <th className="py-2 px-2 text-right">0-30</th>
+                  <th className="py-2 px-2 text-right">31-60</th>
+                  <th className="py-2 px-2 text-right">61-90</th>
+                  <th className="py-2 px-2 text-right">+90</th>
+                </tr>
+              </thead>
+            }
+          >
+            <tbody className="text-slate-200">
+              {deudas.slice(0, 20).map((r) => (
+                <tr key={r.cliente_id} className="border-t border-white/10">
+                  <td className="py-2 px-2">{r.cliente_id}</td>
+                  <td className="py-2 px-2 text-right">${Number(r.deuda_pendiente || 0).toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">${Number(r.deuda_0_30 || 0).toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">${Number(r.deuda_31_60 || 0).toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">${Number(r.deuda_61_90 || 0).toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">${Number(r.deuda_mas_90 || 0).toFixed(0)}</td>
+                </tr>
+              ))}
+              {!deudas.length && (
+                <tr>
+                  <td className="py-2 px-2 text-slate-400" colSpan={6}>
+                    Sin registros de deuda
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </DataTable>
+        )}
       </ChartCard>
 
       {previewOpen && (

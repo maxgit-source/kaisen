@@ -9,7 +9,7 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export default function Button({ children, className, variant = 'primary', loading, disabled, ...rest }: Props) {
   const base =
-    'inline-flex items-center justify-center rounded-xl px-4 h-11 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-400/50';
+    'touch-target inline-flex items-center justify-center rounded-xl px-4 h-11 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-400/50';
 
   const variants = {
     primary:
@@ -29,9 +29,7 @@ export default function Button({ children, className, variant = 'primary', loadi
         className || '',
       ].join(' ')}
       disabled={disabled || loading}
-{...(rest as any)} // FIX
-
-
+      {...(rest as any)}
     >
       {children}
     </motion.button>

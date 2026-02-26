@@ -12,8 +12,31 @@ function normalizeInt(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function toMysqlDatetimeUTC(date) {
+  return (
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())} ` +
+    `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`
+  );
+}
+
+function normalizeDatetimeInput(input, fieldLabel) {
+  if (!input) return toMysqlDatetimeUTC(new Date());
+  const candidate = input instanceof Date ? input : new Date(String(input).trim());
+  if (Number.isNaN(candidate.getTime())) {
+    const e = new Error(`${fieldLabel} invalida`);
+    e.status = 400;
+    throw e;
+  }
+  return toMysqlDatetimeUTC(candidate);
+}
+
 async function createCompra({ proveedor_id, fecha, moneda = 'USD', detalle = [], oc_numero, adjunto_url }) {
   return withTransaction(async (client) => {
+    const compraFecha = normalizeDatetimeInput(fecha, 'Fecha de compra');
     const prov = await client.query('SELECT id FROM proveedores WHERE id = $1', [proveedor_id]);
     if (!prov.rowCount) {
       const e = new Error('Proveedor no encontrado');
@@ -29,7 +52,7 @@ async function createCompra({ proveedor_id, fecha, moneda = 'USD', detalle = [],
     const insCompra = await client.query(
       `INSERT INTO compras(proveedor_id, fecha, total_costo, moneda, estado, oc_numero, adjunto_url)
        VALUES ($1, $2, $3, $4, 'pendiente', $5, $6) RETURNING id`,
-      [proveedor_id, fecha || new Date(), total, moneda, oc_numero || null, adjunto_url || null]
+      [proveedor_id, compraFecha, total, moneda, oc_numero || null, adjunto_url || null]
     );
     const compraId = insCompra.rows[0].id;
 
@@ -154,6 +177,7 @@ async function getCompraDetalle(id) {
 
 async function recibirCompra({ compra_id, fecha_recepcion, observaciones, usuario_id, deposito_id, detalle }) {
   return withTransaction(async (client) => {
+    const recepcionFecha = normalizeDatetimeInput(fecha_recepcion, 'Fecha de recepcion');
     const c = await client.query(
       'SELECT id, estado, proveedor_id, moneda FROM compras WHERE id = $1',
       [compra_id]
@@ -224,7 +248,7 @@ async function recibirCompra({ compra_id, fecha_recepcion, observaciones, usuari
       `INSERT INTO recepciones(compra_id, fecha_recepcion, observaciones, deposito_id)
        VALUES ($1, $2, $3, $4)
        RETURNING id`,
-      [compra_id, fecha_recepcion || new Date(), observaciones || null, resolvedDepositoId]
+      [compra_id, recepcionFecha, observaciones || null, resolvedDepositoId]
     );
     const recepcionId = insRecep.rows[0]?.id;
 

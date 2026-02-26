@@ -5,6 +5,7 @@ import Button from '../ui/Button';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
+import { useMediaQuery } from '../lib/useMediaQuery';
 
 type Role = {
   id: number;
@@ -41,6 +42,7 @@ export default function Usuarios() {
   const { accessToken } = useAuth();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
   const isAdmin = role === 'admin';
+  const isMobile = useMediaQuery('(max-width: 767px)');
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
@@ -55,14 +57,15 @@ export default function Usuarios() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [activo, setActivo] = useState(true);
+  const [selectedRole, setSelectedRole] = useState<'vendedor' | 'fletero'>('vendedor');
   const [cajaTipoDefault, setCajaTipoDefault] = useState<'home_office' | 'sucursal'>('sucursal');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const vendedorRoleId = useMemo(() => {
-    const roleRow = roles.find((r) => r.nombre === 'vendedor');
+  const selectedRoleId = useMemo(() => {
+    const roleRow = roles.find((r) => r.nombre === selectedRole);
     return roleRow?.id || null;
-  }, [roles]);
+  }, [roles, selectedRole]);
 
   const perfById = useMemo(() => {
     const map = new Map<number, PerformanceRow>();
@@ -116,10 +119,10 @@ export default function Usuarios() {
         apiFetch(`/api/usuarios/rendimiento${qs ? `?${qs}` : ''}`),
       ]);
       setRoles(Array.isArray(rolesRes) ? rolesRes : []);
-      const onlyVendedores = Array.isArray(usersRes)
-        ? usersRes.filter((u: Usuario) => u.rol === 'vendedor')
+      const manageableUsers = Array.isArray(usersRes)
+        ? usersRes.filter((u: Usuario) => u.rol === 'vendedor' || u.rol === 'fletero')
         : [];
-      setUsuarios(onlyVendedores);
+      setUsuarios(manageableUsers);
       setPerformance(Array.isArray(perfRes) ? perfRes : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudieron cargar usuarios');
@@ -134,8 +137,8 @@ export default function Usuarios() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!vendedorRoleId) {
-      setError('No se pudo resolver el rol vendedor');
+    if (!selectedRoleId) {
+      setError(`No se pudo resolver el rol ${selectedRole}`);
       return;
     }
     setError(null);
@@ -146,7 +149,7 @@ export default function Usuarios() {
         nombre: nombre.trim(),
         email: email.trim(),
         activo,
-        rol_id: vendedorRoleId,
+        rol_id: selectedRoleId,
         caja_tipo_default: cajaTipoDefault,
       };
       if (password.trim()) {
@@ -157,10 +160,10 @@ export default function Usuarios() {
           method: 'PUT',
           body: JSON.stringify(payload),
         });
-        setSuccess('Vendedor actualizado');
+        setSuccess('Usuario actualizado');
       } else {
         if (!payload.password) {
-          setError('La contraseña es obligatoria para crear un vendedor');
+          setError('La contraseña es obligatoria para crear el usuario');
           setSaving(false);
           return;
         }
@@ -168,7 +171,7 @@ export default function Usuarios() {
           method: 'POST',
           body: JSON.stringify(payload),
         });
-        setSuccess('Vendedor creado');
+        setSuccess('Usuario creado');
       }
       setEditingId(null);
       setNombre('');
@@ -177,7 +180,7 @@ export default function Usuarios() {
       setActivo(true);
       await loadData();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo guardar el vendedor');
+      setError(e instanceof Error ? e.message : 'No se pudo guardar el usuario');
     } finally {
       setSaving(false);
     }
@@ -189,6 +192,7 @@ export default function Usuarios() {
     setEmail(usuario.email || '');
     setPassword('');
     setActivo(normalizeActive(usuario.activo));
+    setSelectedRole(usuario.rol === 'fletero' ? 'fletero' : 'vendedor');
     setCajaTipoDefault(usuario.caja_tipo_default === 'home_office' ? 'home_office' : 'sucursal');
     setSuccess(null);
     setError(null);
@@ -200,6 +204,7 @@ export default function Usuarios() {
     setEmail('');
     setPassword('');
     setActivo(true);
+    setSelectedRole('vendedor');
     setCajaTipoDefault('sucursal');
     setError(null);
     setSuccess(null);
@@ -243,7 +248,7 @@ export default function Usuarios() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-5">
           <div className="text-sm text-slate-300 mb-3">
-            {editingId ? 'Editar vendedor' : 'Registrar vendedor'}
+            {editingId ? 'Editar usuario' : 'Registrar usuario'}
           </div>
           <form onSubmit={onSubmit} className="space-y-4">
             <TextInput
@@ -270,6 +275,17 @@ export default function Usuarios() {
               onChange={(e) => setPassword(e.target.value)}
               required={!editingId}
             />
+              <label className="text-sm text-slate-200">
+                Rol
+                <select
+                  className="input-modern mt-2 w-full"
+                  value={selectedRole}
+                  onChange={(e) => setSelectedRole(e.target.value === 'fletero' ? 'fletero' : 'vendedor')}
+                >
+                  <option value="vendedor">Vendedor</option>
+                  <option value="fletero">Fletero</option>
+                </select>
+              </label>
               <label className="inline-flex items-center gap-2 text-sm text-slate-200">
                 <input
                   type="checkbox"
@@ -294,7 +310,7 @@ export default function Usuarios() {
 
             <div className="flex items-center gap-2">
               <Button type="submit" disabled={saving}>
-                {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear vendedor'}
+                {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear usuario'}
               </Button>
               {editingId && (
                 <Button type="button" variant="outline" onClick={cancelEdit}>
@@ -306,67 +322,127 @@ export default function Usuarios() {
         </div>
 
         <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-5">
-          <div className="text-sm text-slate-300 mb-3">Vendedores</div>
+          <div className="text-sm text-slate-300 mb-3">Vendedores y fleteros</div>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm text-slate-200">
-              <thead className="text-xs uppercase text-slate-400">
-                <tr>
-                  <th className="text-left py-2">Vendedor</th>
-                  <th className="text-left py-2">Ventas</th>
-                  <th className="text-left py-2">Total</th>
-                  <th className="text-left py-2">Margen</th>
-                  <th className="text-left py-2">Rendimiento</th>
-                  <th className="text-left py-2">Estado</th>
-                  <th className="text-left py-2">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
+            {isMobile ? (
+              <div className="space-y-3">
                 {usuarios.map((u) => {
+                  const isFleteroRow = u.rol === 'fletero';
                   const perf = perfById.get(u.id);
-                  const margen = perf ? toNumber(perf.margen) : 0;
-                  const total = perf ? toNumber(perf.total_ventas) : 0;
-                  const ventasCount = perf ? toNumber(perf.ventas_count) : 0;
-                  const label = labelForPerformance(margen);
+                  const margen = isFleteroRow ? 0 : perf ? toNumber(perf.margen) : 0;
+                  const total = isFleteroRow ? 0 : perf ? toNumber(perf.total_ventas) : 0;
+                  const ventasCount = isFleteroRow ? 0 : perf ? toNumber(perf.ventas_count) : 0;
+                  const label = isFleteroRow ? 'N/A' : labelForPerformance(margen);
                   const activoUsuario = normalizeActive(u.activo);
                   return (
-                    <tr key={u.id}>
-                      <td className="py-2">
-                        <div className="font-medium">{u.nombre || u.email}</div>
-                        <div className="text-xs text-slate-400">{u.email}</div>
-                      </td>
-                      <td className="py-2">{ventasCount}</td>
-                      <td className="py-2">{formatMoney(total)}</td>
-                      <td className="py-2">{formatMoney(margen)}</td>
-                      <td className="py-2">
-                        <span className="inline-flex items-center rounded-full bg-white/10 px-2 py-0.5 text-xs">
-                          {label}
-                        </span>
-                      </td>
-                      <td className="py-2">{activoUsuario ? 'Activo' : 'Inactivo'}</td>
-                      <td className="py-2">
+                    <article key={u.id} className="app-panel p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-medium text-slate-100">{u.nombre || u.email}</div>
+                          <div className="text-xs text-slate-400">{u.email}</div>
+                        </div>
+                        <span className="text-xs text-slate-300">{u.rol || '-'}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="app-panel p-2">
+                          <div className="text-slate-400">Ventas</div>
+                          <div className="text-slate-100 font-medium">{ventasCount}</div>
+                        </div>
+                        <div className="app-panel p-2">
+                          <div className="text-slate-400">Total</div>
+                          <div className="text-slate-100 font-medium">{formatMoney(total)}</div>
+                        </div>
+                        <div className="app-panel p-2">
+                          <div className="text-slate-400">Margen</div>
+                          <div className="text-slate-100 font-medium">{formatMoney(margen)}</div>
+                        </div>
+                        <div className="app-panel p-2">
+                          <div className="text-slate-400">Rendimiento</div>
+                          <div className="text-slate-100 font-medium">{label}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-slate-300">{activoUsuario ? 'Activo' : 'Inactivo'}</span>
                         <button
                           type="button"
-                          className="text-xs text-indigo-300 hover:text-indigo-200"
+                          className="touch-target px-3 py-1.5 rounded bg-indigo-500/20 border border-indigo-500/30 text-indigo-200 text-xs"
                           onClick={() => startEdit(u)}
                         >
                           Editar
                         </button>
-                      </td>
-                    </tr>
+                      </div>
+                    </article>
                   );
                 })}
                 {!usuarios.length && (
-                  <tr>
-                    <td colSpan={7} className="py-4 text-center text-slate-400">
-                      No hay vendedores registrados.
-                    </td>
-                  </tr>
+                  <div className="py-4 text-center text-slate-400 app-panel">No hay usuarios registrados.</div>
                 )}
-              </tbody>
-            </table>
+              </div>
+            ) : (
+              <table className="min-w-full text-sm text-slate-200">
+                <thead className="text-xs uppercase text-slate-400">
+                  <tr>
+                    <th className="text-left py-2">Usuario</th>
+                    <th className="text-left py-2">Rol</th>
+                    <th className="text-left py-2">Ventas</th>
+                    <th className="text-left py-2">Total</th>
+                    <th className="text-left py-2">Margen</th>
+                    <th className="text-left py-2">Rendimiento</th>
+                    <th className="text-left py-2">Estado</th>
+                    <th className="text-left py-2">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {usuarios.map((u) => {
+                    const isFleteroRow = u.rol === 'fletero';
+                    const perf = perfById.get(u.id);
+                    const margen = isFleteroRow ? 0 : perf ? toNumber(perf.margen) : 0;
+                    const total = isFleteroRow ? 0 : perf ? toNumber(perf.total_ventas) : 0;
+                    const ventasCount = isFleteroRow ? 0 : perf ? toNumber(perf.ventas_count) : 0;
+                    const label = isFleteroRow ? 'N/A' : labelForPerformance(margen);
+                    const activoUsuario = normalizeActive(u.activo);
+                    return (
+                      <tr key={u.id}>
+                        <td className="py-2">
+                          <div className="font-medium">{u.nombre || u.email}</div>
+                          <div className="text-xs text-slate-400">{u.email}</div>
+                        </td>
+                        <td className="py-2">{u.rol || '-'}</td>
+                        <td className="py-2">{ventasCount}</td>
+                        <td className="py-2">{formatMoney(total)}</td>
+                        <td className="py-2">{formatMoney(margen)}</td>
+                        <td className="py-2">
+                          <span className="inline-flex items-center rounded-full bg-white/10 px-2 py-0.5 text-xs">
+                            {label}
+                          </span>
+                        </td>
+                        <td className="py-2">{activoUsuario ? 'Activo' : 'Inactivo'}</td>
+                        <td className="py-2">
+                          <button
+                            type="button"
+                            className="text-xs text-indigo-300 hover:text-indigo-200"
+                            onClick={() => startEdit(u)}
+                          >
+                            Editar
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!usuarios.length && (
+                    <tr>
+                      <td colSpan={8} className="py-4 text-center text-slate-400">
+                        No hay usuarios registrados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
     </div>
   );
 }
+

@@ -2,51 +2,87 @@ const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const users = require('../db/repositories/userRepository');
 const userDeps = require('../db/repositories/usuarioDepositoRepository');
-const licenseService = require('../services/licenseService');
+
+const ROLE_NAMES = ['admin', 'gerente', 'vendedor', 'fletero'];
 
 const validateCreate = [
   body('nombre').trim().notEmpty(),
   body('email').isEmail(),
   body('password').isLength({ min: 6 }),
-  body('rol_id').isInt({ gt: 0 }),
+  body('rol_id').optional().isInt({ gt: 0 }),
+  body('rol').optional().isIn(ROLE_NAMES),
   body('activo').optional().isBoolean(),
   body('caja_tipo_default').optional().isIn(['home_office', 'sucursal']),
 ];
 
+const validateUpdate = [
+  body('nombre').optional().isString(),
+  body('email').optional().isEmail(),
+  body('rol_id').optional().isInt({ gt: 0 }),
+  body('rol').optional().isIn(ROLE_NAMES),
+  body('activo').optional().isBoolean(),
+  body('password').optional().isLength({ min: 6 }),
+  body('caja_tipo_default').optional().isIn(['home_office', 'sucursal']),
+];
+
+async function resolveRoleId({ rol_id, rol }) {
+  if (rol_id != null && rol_id !== '') {
+    const n = Number(rol_id);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  const byName = await users.getRoleByName(rol);
+  if (byName?.id) return Number(byName.id);
+  return null;
+}
+
 async function list(req, res) {
   try {
-    const rows = await users.list({ q: req.query.q, activo: req.query.activo, limit: req.query.limit, offset: req.query.offset });
+    const rows = await users.list({
+      q: req.query.q,
+      activo: req.query.activo,
+      role: req.query.role,
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: 'No se pudieron obtener usuarios' });
   }
 }
 
+async function listVendedores(req, res) {
+  try {
+    const rows = await users.list({
+      q: req.query.q,
+      activo: req.query.activo,
+      role: 'vendedor',
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudieron obtener vendedores' });
+  }
+}
+
 async function create(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
   try {
-    const license = await licenseService.getActiveLicense();
-    if (!license || !licenseService.hasFeature(license, licenseService.FEATURE_USUARIOS)) {
-      return res.status(403).json({ error: 'Modulo de usuarios no habilitado' });
+    const roleId = await resolveRoleId(req.body || {});
+    if (!roleId) {
+      return res.status(400).json({ error: 'Debe indicar un rol valido (rol o rol_id)' });
     }
+
     const activo = req.body.activo !== false;
-    if (activo && license.max_users != null) {
-      const maxUsers = Number(license.max_users);
-      if (Number.isFinite(maxUsers) && maxUsers > 0) {
-        const activeCount = await users.countActive();
-        if (activeCount >= maxUsers) {
-          return res.status(403).json({ error: 'Limite de usuarios alcanzado' });
-        }
-      }
-    }
     const rounds = Number(process.env.BCRYPT_ROUNDS || 10);
     const hash = await bcrypt.hash(req.body.password, rounds);
     const r = await users.create({
       nombre: req.body.nombre,
       email: req.body.email,
       password_hash: hash,
-      rol_id: req.body.rol_id,
+      rol_id: roleId,
       activo,
       caja_tipo_default: req.body.caja_tipo_default,
     });
@@ -56,45 +92,37 @@ async function create(req, res) {
   }
 }
 
-const validateUpdate = [
-  body('nombre').optional().isString(),
-  body('email').optional().isEmail(),
-  body('rol_id').optional().isInt({ gt: 0 }),
-  body('activo').optional().isBoolean(),
-  body('password').optional().isLength({ min: 6 }),
-  body('caja_tipo_default').optional().isIn(['home_office', 'sucursal']),
-];
-
 async function update(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
   const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'ID invalido' });
+  }
+
   try {
-    const license = await licenseService.getActiveLicense();
-    if (!license || !licenseService.hasFeature(license, licenseService.FEATURE_USUARIOS)) {
-      return res.status(403).json({ error: 'Modulo de usuarios no habilitado' });
-    }
     const fields = { ...req.body };
     delete fields.password;
-    if (fields.activo === true && license.max_users != null) {
-      const current = await users.findById(id);
-      const wasActive = current ? current.activo !== false : false;
-      const maxUsers = Number(license.max_users);
-      if (!wasActive && Number.isFinite(maxUsers) && maxUsers > 0) {
-        const activeCount = await users.countActive(id);
-        if (activeCount >= maxUsers) {
-          return res.status(403).json({ error: 'Limite de usuarios alcanzado' });
-        }
+
+    if (Object.prototype.hasOwnProperty.call(fields, 'rol') || Object.prototype.hasOwnProperty.call(fields, 'rol_id')) {
+      const roleId = await resolveRoleId(fields);
+      if (!roleId) {
+        return res.status(400).json({ error: 'Rol invalido' });
       }
+      fields.rol_id = roleId;
+      delete fields.rol;
     }
+
     const r = await users.update(id, fields);
     if (!r) return res.status(404).json({ error: 'Usuario no encontrado' });
+
     if (req.body.password) {
       const rounds = Number(process.env.BCRYPT_ROUNDS || 10);
       const hash = await bcrypt.hash(req.body.password, rounds);
       await users.setPasswordHash(id, hash);
     }
+
     res.json({ message: 'Usuario actualizado' });
   } catch (e) {
     res.status(500).json({ error: 'No se pudo actualizar el usuario' });
@@ -124,36 +152,33 @@ async function sellerPerformance(req, res) {
 async function getUserDepositos(req, res) {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
-    return res.status(400).json({ error: 'ID invГЎlido' });
+    return res.status(400).json({ error: 'ID invalido' });
   }
   try {
     const rows = await userDeps.getUserDepositos(id);
     res.json(rows);
   } catch (e) {
-    res
-      .status(500)
-      .json({ error: 'No se pudieron obtener los depГіsitos del usuario' });
+    res.status(500).json({ error: 'No se pudieron obtener los depositos del usuario' });
   }
 }
 
 async function setUserDepositos(req, res) {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
-    return res.status(400).json({ error: 'ID invГЎlido' });
+    return res.status(400).json({ error: 'ID invalido' });
   }
   const items = Array.isArray(req.body?.depositos) ? req.body.depositos : [];
   try {
     await userDeps.setUserDepositos(id, items);
     res.json({ ok: true });
   } catch (e) {
-    res
-      .status(500)
-      .json({ error: 'No se pudieron actualizar los depГіsitos del usuario' });
+    res.status(500).json({ error: 'No se pudieron actualizar los depositos del usuario' });
   }
 }
 
 module.exports = {
   list,
+  listVendedores,
   create: [...validateCreate, create],
   update: [...validateUpdate, update],
   roles,

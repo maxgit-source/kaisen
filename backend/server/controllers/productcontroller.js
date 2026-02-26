@@ -19,6 +19,7 @@ const HEADER_ALIASES = {
     'articulo',
   ],
   category: ['categoria', 'category', 'rubro', 'grupo', 'familia'],
+  category_path: ['categoria_path', 'category_path', 'ruta_categoria', 'ruta category', 'categoria_ruta'],
   category_id: ['categoria_id', 'category_id', 'id_categoria', 'idcategory'],
   codigo: ['codigo', 'sku', 'code', 'barcode', 'cod'],
   description: ['descripcion', 'description', 'detalle', 'desc'],
@@ -63,6 +64,17 @@ function normalizeHeader(value) {
 
 function normalizeText(value) {
   return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function parseCategoryPath(raw) {
+  const source = normalizeText(raw);
+  if (!source) return [];
+  const parts = source
+    .split(/\s*(?:>|\/|\\|\|)\s*/g)
+    .map((p) => normalizeText(p))
+    .filter(Boolean);
+  if (!parts.length) return [source];
+  return parts;
 }
 
 function cleanHeading(text) {
@@ -135,6 +147,13 @@ function normalizeMargin(raw) {
   return num > 1 ? num / 100 : num;
 }
 
+function normalizeOptionalImageUrl(value) {
+  if (typeof value === 'undefined') return undefined;
+  if (value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+}
+
 async function loadWorksheet(file) {
   const workbook = new ExcelJS.Workbook();
   const ext = path.extname(file.originalname || '').toLowerCase();
@@ -173,7 +192,7 @@ function buildColumnMap(headerRow) {
 function scoreColumnMap(map) {
   let score = 0;
   if (map.name) score += 2;
-  if (map.category || map.category_id) score += 2;
+  if (map.category || map.category_path || map.category_id) score += 2;
   if (map.price) score += 1;
   if (map.costo_pesos || map.costo_dolares) score += 1;
   return score;
@@ -284,17 +303,21 @@ function extractFallbackRows(worksheet, { fallbackCategory }) {
 
 async function getProducts(req, res) {
   try {
-    const { category_id, page, limit, sort, dir, all } = req.query || {};
+    const { category_id, page, limit, sort, dir, all, include_descendants } = req.query || {};
     const rawSearch = (req.query.search || req.query.q || '').toString().trim();
     const q = rawSearch || undefined;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const allowAll = String(all || '') === '1';
+    const includeDescendants =
+      String(include_descendants || '').toLowerCase() === '1' ||
+      String(include_descendants || '').toLowerCase() === 'true';
     const maxLimit = allowAll ? 10000 : 200;
     const defaultLimit = allowAll ? maxLimit : 50;
     const perPage = Math.min(Math.max(parseInt(limit, 10) || defaultLimit, 1), maxLimit);
     const { rows, total } = await repo.listProductsPaginated({
       q,
       categoryId: category_id,
+      includeDescendants,
       page: pageNum,
       limit: perPage,
       sort,
@@ -311,6 +334,7 @@ async function getProducts(req, res) {
       price: r.price,
       image_url: r.image_url || null,
       category_name: r.category_name,
+      category_path: r.category_path || null,
       stock_quantity: r.stock_quantity,
       // Extended pricing fields (optional for compatibility)
       costo_pesos: r.costo_pesos,
@@ -362,7 +386,7 @@ const validateProduct = [
     .isLength({ min: 3, max: 50 }).withMessage('codigo must be 3-50 chars')
     .isString().withMessage('codigo must be a string'),
   check('image_url')
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isString().withMessage('Image URL must be a string'),
   check('category_id')
@@ -454,6 +478,7 @@ async function createProduct(req, res) {
     camara_mp,
     bateria_mah,
   } = req.body;
+  const normalizedImageUrl = normalizeOptionalImageUrl(image_url);
 
   try {
     const result = await repo.createProduct({
@@ -461,7 +486,7 @@ async function createProduct(req, res) {
       description,
       price,
       codigo,
-      image_url,
+      image_url: normalizedImageUrl,
       category_id: Number(category_id),
       stock_quantity,
       precio_costo_pesos,
@@ -532,6 +557,7 @@ async function updateProduct(req, res) {
     camara_mp,
     bateria_mah,
   } = req.body;
+  const normalizedImageUrl = normalizeOptionalImageUrl(image_url);
 
   if (!id) {
     return res.status(400).json({ error: 'Product ID required for update' });
@@ -543,7 +569,7 @@ async function updateProduct(req, res) {
       description,
       price,
       codigo,
-      image_url,
+      image_url: normalizedImageUrl,
       category_id: Number(category_id),
       stock_quantity,
       precio_costo_pesos,
@@ -656,7 +682,7 @@ async function importProducts(req, res) {
 
     let useFallback = false;
     let fallbackItems = [];
-    if (!columnMap.name || (!columnMap.category && !columnMap.category_id)) {
+    if (!columnMap.name || (!columnMap.category && !columnMap.category_path && !columnMap.category_id)) {
       fallbackItems = extractFallbackRows(worksheet, { fallbackCategory });
       if (!fallbackItems.length) {
         return res.status(400).json({
@@ -682,7 +708,64 @@ async function importProducts(req, res) {
     let categoryRestored = 0;
     let rowCount = 0;
 
-    async function resolveCategoryId({ categoryName, categoryId }) {
+    function categoryNodeCacheKey(parentId, name) {
+      return `node:${parentId || 0}:${normalizeText(name).toLowerCase()}`;
+    }
+
+    async function findCategoryNode(name, parentId) {
+      const key = categoryNodeCacheKey(parentId, name);
+      if (categoryCache.has(key)) return categoryCache.get(key);
+      const row = await categoryRepo.findByName(name, parentId);
+      categoryCache.set(key, row || null);
+      return row || null;
+    }
+
+    async function findCategoryByPathSegments(segments) {
+      if (!Array.isArray(segments) || !segments.length) return null;
+      let parentId = null;
+      let found = null;
+      for (const segment of segments) {
+        found = await findCategoryNode(segment, parentId);
+        if (!found) return null;
+        parentId = found.id ? Number(found.id) : null;
+      }
+      return found;
+    }
+
+    async function ensureCategoryByPathSegments(segments) {
+      if (!Array.isArray(segments) || !segments.length) return null;
+      let parentId = null;
+      let current = null;
+
+      for (const segment of segments) {
+        const existing = await findCategoryNode(segment, parentId);
+        if (existing && existing.activo) {
+          current = existing;
+          parentId = Number(existing.id);
+          continue;
+        }
+
+        const ensured = await categoryRepo.restoreOrInsert({
+          name: normalizeText(segment),
+          image_url: null,
+          description: null,
+          parent_id: parentId,
+          sort_order: 0,
+        });
+        if (ensured?.restored) categoryRestored += 1;
+        else categoryCreated += 1;
+
+        categoryCache.delete(categoryNodeCacheKey(parentId, segment));
+        const refreshed = await findCategoryNode(segment, parentId);
+        if (!refreshed) return null;
+        current = refreshed;
+        parentId = Number(refreshed.id);
+      }
+
+      return current;
+    }
+
+    async function resolveCategoryId({ categoryName, categoryPath, categoryId }) {
       if (categoryId && Number.isInteger(categoryId) && categoryId > 0) {
         const cacheKey = `id:${categoryId}`;
         if (categoryCache.has(cacheKey)) return categoryCache.get(cacheKey);
@@ -692,42 +775,60 @@ async function importProducts(req, res) {
         return existing;
       }
 
-      const nameKey = normalizeText(categoryName).toLowerCase();
-      if (categoryCache.has(nameKey)) return categoryCache.get(nameKey);
-      const existing = await categoryRepo.findByName(categoryName);
-      categoryCache.set(nameKey, existing || null);
+      const segments = Array.isArray(categoryPath) ? categoryPath.filter(Boolean) : [];
+      if (segments.length) {
+        return findCategoryByPathSegments(segments);
+      }
+
+      const categoryNameNorm = normalizeText(categoryName);
+      if (!categoryNameNorm) return null;
+      const cacheKey = `name:any:${categoryNameNorm.toLowerCase()}`;
+      if (categoryCache.has(cacheKey)) return categoryCache.get(cacheKey);
+      const existing = await categoryRepo.findByName(categoryNameNorm);
+      categoryCache.set(cacheKey, existing || null);
       return existing || null;
     }
 
-    async function ensureCategory({ categoryName }) {
-      const nameKey = normalizeText(categoryName).toLowerCase();
-      if (categoryCache.has(nameKey) && categoryCache.get(nameKey)) {
-        return categoryCache.get(nameKey);
+    async function ensureCategory({ categoryName, categoryPath }) {
+      const segments = Array.isArray(categoryPath) ? categoryPath.filter(Boolean) : [];
+      if (segments.length) {
+        return ensureCategoryByPathSegments(segments);
       }
-      const existing = await categoryRepo.findByName(categoryName);
+
+      const categoryNameNorm = normalizeText(categoryName);
+      if (!categoryNameNorm) return null;
+      const cacheKey = `name:any:${categoryNameNorm.toLowerCase()}`;
+      if (categoryCache.has(cacheKey) && categoryCache.get(cacheKey)) {
+        return categoryCache.get(cacheKey);
+      }
+      const existing = await categoryRepo.findByName(categoryNameNorm);
       if (existing) {
-        categoryCache.set(nameKey, existing);
+        categoryCache.set(cacheKey, existing);
         if (!existing.activo) {
-          const restored = await categoryRepo.restoreOrInsert({
-            name: normalizeText(categoryName),
+          await categoryRepo.restoreOrInsert({
+            name: categoryNameNorm,
             image_url: null,
             description: null,
+            parent_id: existing.parent_id || null,
+            sort_order: existing.sort_order || 0,
           });
           categoryRestored += 1;
-          const refreshed = await categoryRepo.findByName(categoryName);
-          categoryCache.set(nameKey, refreshed);
+          const refreshed = await categoryRepo.findByName(categoryNameNorm, existing.parent_id ?? null);
+          categoryCache.set(cacheKey, refreshed);
           return refreshed;
         }
         return existing;
       }
-      const createdCat = await categoryRepo.restoreOrInsert({
-        name: normalizeText(categoryName),
+      await categoryRepo.restoreOrInsert({
+        name: categoryNameNorm,
         image_url: null,
         description: null,
+        parent_id: null,
+        sort_order: 0,
       });
       categoryCreated += 1;
-      const refreshed = await categoryRepo.findByName(categoryName);
-      categoryCache.set(nameKey, refreshed);
+      const refreshed = await categoryRepo.findByName(categoryNameNorm, null);
+      categoryCache.set(cacheKey, refreshed);
       return refreshed;
     }
 
@@ -759,14 +860,16 @@ async function importProducts(req, res) {
       for (const item of fallbackItems) {
         const rowIndex = item.rowIndex;
         const name = normalizeText(item.name);
-        const categoryName = normalizeText(item.category || fallbackCategory || '');
+        const categoryRaw = normalizeText(item.category || fallbackCategory || '');
+        const categoryPath = parseCategoryPath(categoryRaw);
+        const categoryName = categoryPath.join(' > ');
         const price = parseNumber(item.price);
 
         if (!name) {
           errors.push({ row: rowIndex, field: 'nombre', message: 'Nombre requerido' });
           continue;
         }
-        if (!categoryName) {
+        if (!categoryPath.length) {
           errors.push({ row: rowIndex, field: 'categoria', message: 'Categoría requerida' });
           continue;
         }
@@ -775,9 +878,9 @@ async function importProducts(req, res) {
           continue;
         }
 
-        let categoryRecord = await resolveCategoryId({ categoryName });
+        let categoryRecord = await resolveCategoryId({ categoryName, categoryPath });
         if (!categoryRecord && !dryRun) {
-          categoryRecord = await ensureCategory({ categoryName });
+          categoryRecord = await ensureCategory({ categoryName, categoryPath });
         }
         if (!categoryRecord && dryRun) {
           categoryRecord = { id: null, name: categoryName, activo: false, pending: true };
@@ -847,9 +950,14 @@ async function importProducts(req, res) {
         rowCount += 1;
 
         const name = normalizeText(extractCellValue(row.getCell(columnMap.name)));
-        const categoryName = columnMap.category
+        const categoryNameRaw = columnMap.category
           ? normalizeText(extractCellValue(row.getCell(columnMap.category)))
           : '';
+        const categoryPathRaw = columnMap.category_path
+          ? normalizeText(extractCellValue(row.getCell(columnMap.category_path)))
+          : '';
+        const categoryPath = parseCategoryPath(categoryPathRaw || categoryNameRaw);
+        const categoryName = categoryPath.join(' > ');
         const categoryIdRaw = columnMap.category_id
           ? extractCellValue(row.getCell(columnMap.category_id))
           : null;
@@ -903,7 +1011,7 @@ async function importProducts(req, res) {
         continue;
       }
 
-      if (!categoryName && (!categoryId || !Number.isInteger(categoryId))) {
+      if (!categoryPath.length && (!categoryId || !Number.isInteger(categoryId))) {
         errors.push({ row: rowIndex, field: 'categoria', message: 'Categoría requerida' });
         continue;
       }
@@ -939,9 +1047,9 @@ async function importProducts(req, res) {
           continue;
         }
       } else {
-        categoryRecord = await resolveCategoryId({ categoryName });
+        categoryRecord = await resolveCategoryId({ categoryName, categoryPath });
         if (!categoryRecord && !dryRun) {
-          categoryRecord = await ensureCategory({ categoryName });
+          categoryRecord = await ensureCategory({ categoryName, categoryPath });
         }
         if (!categoryRecord && dryRun) {
           categoryRecord = { id: null, name: categoryName, activo: false, pending: true };

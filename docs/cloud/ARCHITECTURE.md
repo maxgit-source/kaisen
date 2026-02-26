@@ -1,26 +1,43 @@
-# Cloud architecture (phase 1-2)
+# Cloud architecture (cloud-only)
 
-Goal: connect local SQLite ERP to a cloud catalog with a private admin panel and a public catalog per tenant.
+## Objetivo
+Arquitectura 100% cloud-native para operar desde web:
+- Backend API centralizado en Hostinger.
+- Frontend web desplegado en Vercel.
+- Base de datos MySQL como unica fuente de verdad.
 
-## Actors
-- Admin panel (you): creates tenants and issues a one-time token.
-- Local ERP (client): stores token + endpoint, sends sync events.
-- Cloud API: validates token, stores events, serves public catalog.
-- Public catalog: read-only, per tenant slug.
+No existe:
+- conexion por IP/LAN al backend,
+- licencia por instalacion,
+- sincronizacion local->cloud por cola puente,
+- backup/restore de archivos `.sqlite`.
 
-## Flow
-1) Admin creates tenant in the secret panel.
-2) Panel generates a token (one time) + slug.
-3) Client enters token in local app (cloud linking).
-4) Local app sends events to cloud /api/sync with Bearer token.
-5) Cloud stores events and updates catalog tables.
-6) Public catalog is available at /<slug>.
+## Componentes
+1. Frontend web (Vercel)
+- Consume API HTTPS del backend.
+- Maneja sesion por JWT (`accessToken` + `refreshToken`).
 
-## Security
-- Token is never stored in plain text (hash only).
-- Admin panel guarded by ADMIN_API_KEY or Supabase Auth.
-- RLS enabled on Supabase (tenant_id isolation).
+2. Backend API (Hostinger)
+- Expone endpoints REST de negocio.
+- Ejecuta autenticacion, autorizacion por rol y auditoria.
+- Expone catalogo publico por `slug`.
 
-## Environments
-- Local ERP: SQLite + token stored in parametros_sistema.
-- Cloud: Supabase Postgres + Vercel serverless functions.
+3. MySQL (Hostinger)
+- Contiene datos operativos (usuarios, catalogo, ventas, pagos, etc.).
+- Tabla `_migrations` controla versionado de esquema.
+
+## Flujo principal
+1. Setup inicial: `POST /api/setup/admin` (una sola vez).
+2. Login: `POST /api/login`.
+3. Gestion de usuarios/vendedores desde API central.
+4. Configuracion de catalogo con `slug`.
+5. Catalogo publico por URL cloud: `/api/catalogo/public/:slug`.
+
+## Seguridad
+- CORS estricto por origen permitido.
+- `X-Request-Id` y logs estructurados por request.
+- Rate limiting global + rate limiting de login.
+- JWT para autenticacion y middleware RBAC para permisos por rol.
+
+## Estado de migracion
+Backend cloud-only operativo. Los modulos legacy de licencia/red local/sync/backup local fueron eliminados del runtime.

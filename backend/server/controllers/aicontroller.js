@@ -6,10 +6,20 @@ async function forecast(req, res) {
     const historyDays = Math.max(7, Number(req.query.history || 90));
     const limit = Math.max(1, Number(req.query.limit || 100));
     const categoryId = req.query.category_id != null ? Number(req.query.category_id) : undefined;
+    const includeDescendants =
+      String(req.query.include_descendants || '').toLowerCase() === '1' ||
+      String(req.query.include_descendants || '').toLowerCase() === 'true';
     const stockTargetDays = req.query.stockTargetDays
       ? Number(req.query.stockTargetDays)
       : undefined;
-    const data = await ai.forecastByProduct({ forecastDays, historyDays, limit, stockTargetDays, categoryId });
+    const data = await ai.forecastByProduct({
+      forecastDays,
+      historyDays,
+      limit,
+      stockTargetDays,
+      categoryId,
+      includeDescendants,
+    });
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: 'No se pudo obtener el pronóstico' });
@@ -22,7 +32,10 @@ async function stockouts(req, res) {
     const historyDays = Math.max(7, Number(req.query.history || 90));
     const limit = Math.max(1, Number(req.query.limit || 100));
     const categoryId = req.query.category_id != null ? Number(req.query.category_id) : undefined;
-    const data = await ai.stockouts({ days, historyDays, limit, categoryId });
+    const includeDescendants =
+      String(req.query.include_descendants || '').toLowerCase() === '1' ||
+      String(req.query.include_descendants || '').toLowerCase() === 'true';
+    const data = await ai.stockouts({ days, historyDays, limit, categoryId, includeDescendants });
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: 'No se pudo obtener riesgo de stockout' });
@@ -91,10 +104,13 @@ async function predictionsSummary(req, res) {
         : req.query?.category_id != null
         ? Number(req.query.category_id)
         : undefined;
+    const includeDescendants =
+      String(req.body?.include_descendants ?? req.query?.include_descendants ?? '').toLowerCase() === '1' ||
+      String(req.body?.include_descendants ?? req.query?.include_descendants ?? '').toLowerCase() === 'true';
 
     const [forecastList, stockoutList, preciosList, anomalyRes, insights] = await Promise.all([
-      ai.forecastByProduct({ forecastDays, historyDays, limit: 50, categoryId }),
-      ai.stockouts({ days: forecastDays, historyDays, limit: 50, categoryId }),
+      ai.forecastByProduct({ forecastDays, historyDays, limit: 50, categoryId, includeDescendants }),
+      ai.stockouts({ days: forecastDays, historyDays, limit: 50, categoryId, includeDescendants }),
       ai.pricingRecommendations({ historyDays, limit: 50 }),
       ai.anomalies({ scope: 'sales', period: historyDays, sigma: 3 }).catch(() => ({ sales: [] })),
       ai.insights({ historyDays, forecastDays, limit: 12 }).catch(() => null),
@@ -123,7 +139,13 @@ async function predictionsSummary(req, res) {
 
     const data = {
       generated_at: new Date().toISOString(),
-      params: { historyDays, forecastDays, limit, categoryId: categoryId ?? null },
+      params: {
+        historyDays,
+        forecastDays,
+        limit,
+        categoryId: categoryId ?? null,
+        includeDescendants,
+      },
       highlights: {
         top_rotacion: topRotation,
         stockouts: stockRisk,

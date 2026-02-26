@@ -13,6 +13,7 @@ const validateCreate = [
   body('es_reserva').optional().isBoolean(),
   body('caja_tipo').optional().isIn(['home_office', 'sucursal']),
   body('referido_codigo').optional().isString().isLength({ min: 4, max: 40 }).trim(),
+  body('price_list_type').optional().isIn(['local', 'distribuidor', 'final']),
 ];
 
 const validateCancel = [
@@ -23,7 +24,7 @@ async function create(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   try {
-    const { cliente_id, fecha, descuento, impuestos, items, deposito_id, es_reserva, caja_tipo } = req.body;
+    const { cliente_id, fecha, descuento, impuestos, items, deposito_id, es_reserva, caja_tipo, price_list_type } = req.body;
     const referido_codigo = req.body?.referido_codigo;
     try {
       if (process.env.NODE_ENV !== 'production') {
@@ -42,6 +43,7 @@ async function create(req, res) {
       usuario_id,
       referido_codigo,
       caja_tipo,
+      price_list_type,
     });
     res.status(201).json(r);
   } catch (e) {
@@ -56,8 +58,8 @@ async function create(req, res) {
 
 async function list(req, res) {
   try {
-    const { limit, offset, cliente_id } = req.query || {};
-    const rows = await repo.listarVentas({ limit, offset, cliente_id });
+    const { limit, offset, cliente_id, view } = req.query || {};
+    const rows = await repo.listarVentas({ limit, offset, cliente_id, view });
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: 'No se pudieron obtener las ventas' });

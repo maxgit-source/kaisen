@@ -3,12 +3,37 @@ const approvals = require('../db/repositories/approvalsRepository');
 const { pool } = require('../db/pg');
 
 function toNumber(x) { const n = Number(x); return Number.isFinite(n) ? n : NaN; }
+const missingApprovalInfraWarnings = new Set();
+
+function isMissingApprovalInfraError(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const message = String(err.sqlMessage || err.message || '').toLowerCase();
+  if (code !== 'ER_NO_SUCH_TABLE' && !message.includes("doesn't exist")) return false;
+  return message.includes('reglas_aprobacion') || message.includes('aprobaciones');
+}
+
+function warnMissingApprovalInfra(err) {
+  const msg = String(err?.sqlMessage || err?.message || 'Infra de aprobaciones no disponible');
+  if (missingApprovalInfraWarnings.has(msg)) return;
+  missingApprovalInfraWarnings.add(msg);
+  console.warn(`[approvalMiddleware] Aprobaciones desactivadas temporalmente: ${msg}`);
+}
 
 // Factory: requireApproval('rule_key', async (req, regla) => ({ requires, entity, entityId, motivo, payload }))
 function requireApproval(ruleKey, evaluator) {
   return async function(req, res, next) {
     try {
-      const rule = await rules.findActiveByKey(ruleKey);
+      let rule = null;
+      try {
+        rule = await rules.findActiveByKey(ruleKey);
+      } catch (e) {
+        if (isMissingApprovalInfraError(e)) {
+          warnMissingApprovalInfra(e);
+          return next();
+        }
+        throw e;
+      }
       if (!rule) return next();
 
       const evalRes = await evaluator(req, rule);
@@ -26,15 +51,23 @@ function requireApproval(ruleKey, evaluator) {
         });
         if (consumed) return next();
       } catch (_) {}
-      const r = await approvals.createPending({
-        regla_id: rule.id,
-        solicitado_por_usuario_id: userId,
-        entidad: entity,
-        entidad_id: entityId,
-        motivo,
-        payload,
-      });
-      return res.status(403).json({ error: 'Pendiente de aprobación', aprobacion_id: r.id, regla: rule.clave });
+      try {
+        const r = await approvals.createPending({
+          regla_id: rule.id,
+          solicitado_por_usuario_id: userId,
+          entidad: entity,
+          entidad_id: entityId,
+          motivo,
+          payload,
+        });
+        return res.status(403).json({ error: 'Pendiente de aprobación', aprobacion_id: r.id, regla: rule.clave });
+      } catch (e) {
+        if (isMissingApprovalInfraError(e)) {
+          warnMissingApprovalInfra(e);
+          return next();
+        }
+        throw e;
+      }
     } catch (e) {
       next(e);
     }

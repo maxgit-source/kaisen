@@ -1,10 +1,11 @@
 const { query } = require('../db/pg');
 const inv = require('../services/inventoryService');
 const { body, validationResult } = require('express-validator');
+const categoryRepo = require('../db/repositories/categoryRepository');
 
 async function list(req, res) {
   try {
-    const { q, category_id, limit, offset, deposito_id } = req.query || {};
+    const { q, category_id, include_descendants, limit, offset, deposito_id } = req.query || {};
     const params = [];
     const where = [];
     if (q) {
@@ -14,8 +15,18 @@ async function list(req, res) {
       );
     }
     if (category_id) {
-      params.push(Number(category_id));
-      where.push(`p.categoria_id = $${params.length}`);
+      const includeDescendants =
+        String(include_descendants || '').toLowerCase() === '1' ||
+        String(include_descendants || '').toLowerCase() === 'true';
+      const ids = await categoryRepo.getCategoryFilterIds(category_id, {
+        includeDescendants,
+        onlyActive: true,
+      });
+      if (!ids.length) return res.json([]);
+      const start = params.length + 1;
+      const marks = ids.map((_, idx) => `$${start + idx}`).join(', ');
+      params.push(...ids);
+      where.push(`p.categoria_id IN (${marks})`);
     }
     let joinInventario = 'LEFT JOIN inventario i ON i.producto_id = p.id';
     if (deposito_id) {

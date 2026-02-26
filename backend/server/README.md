@@ -3,7 +3,7 @@ Servidor (Node.js + Express)
 Resumen tecnico
 - Runtime: Node.js + Express
 - Seguridad: Helmet (CSP), CORS configurable, HPP, xss-clean, compresion
-- Base de datos: SQLite (better-sqlite3 via backend/server/db/pg.js)
+- Base de datos: MySQL 8 (adapter en `backend/server/db/pg.js`)
 - Autenticacion: JWT (access/refresh), lista negra en memoria para revocacion, persistencia de refresh tokens en DB
 - Limitacion de tasa: rate-limits globales y por ruta de login
 
@@ -17,8 +17,8 @@ Estructura
 - utils/: helpers varios (mailer para 2FA, si corresponde).
 
 Base de datos
-- Esquema base en `backend/database/migrations_sqlite/V1__init.sql` (usuarios, roles, productos, categorias, inventario, ventas, pagos, etc.).
-- Semillas basicas en `backend/database/seed.sql` (roles) y migraciones en `backend/database/migrations_sqlite`.
+- Esquema base cloud en `backend/database/migrations_mysql/V1__core_cloud.sql`.
+- Migraciones ejecutables con `npm run migrate` (directorio por defecto `backend/database/migrations_mysql`).
 
 Autenticacion y autorizacion
 - Login: `POST /api/login` valida credenciales y entrega access/refresh tokens.
@@ -35,16 +35,15 @@ Endpoints principales (resumen)
 Variables de entorno (no incluir valores en el repositorio)
 - JWT/seguridad: `JWT_SECRET`, `REFRESH_TOKEN_SECRET`, `JWT_ALG`, `JWT_ISSUER`, `JWT_AUDIENCE`.
 - CORS/CSP: `CORS_ALLOWED_ORIGINS`, `PUBLIC_ORIGIN`, `TRUST_PROXY`, `FORCE_HTTPS`.
-- SQLite: `SQLITE_PATH` (opcional).
+- MySQL: `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`.
 - SMTP (opcional 2FA): `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM_NAME`, `SMTP_FROM_EMAIL`.
 
 Puesta en marcha local
-1) (Opcional) Definir `SQLITE_PATH` para el archivo SQLite.
+1) Configurar variables MySQL.
 2) Aplicar migraciones:
    - `cd backend/server`
    - `npm run migrate`
-3) Semillas (opcional): ejecutar `backend/database/seed.sql` con un cliente SQLite.
-4) Instalar y ejecutar:
+3) Instalar y ejecutar:
    - `cd backend/server`
    - `npm install`
    - `npm run dev`

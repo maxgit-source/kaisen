@@ -95,7 +95,7 @@ async function listOrders(req, res) {
       `SELECT id, order_number, buyer_name, buyer_email, buyer_phone,
               total_amount::float AS total_amount, status, order_date
          FROM Orders
-        WHERE deleted_at IS NULL OR deleted_at IS NULL
+        WHERE deleted_at IS NULL
         ORDER BY id DESC
         LIMIT 200`
     );
@@ -248,7 +248,7 @@ async function listOrdersV2(req, res) {
       `SELECT id, order_number, buyer_code, buyer_name, buyer_email, buyer_phone,
               total_amount::float AS total_amount, status, order_date
          FROM Orders
-        WHERE deleted_at IS NULL OR deleted_at IS NULL
+        WHERE deleted_at IS NULL
         ORDER BY id DESC
         LIMIT 200`
     );

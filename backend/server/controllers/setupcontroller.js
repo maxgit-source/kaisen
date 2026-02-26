@@ -2,7 +2,6 @@ const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const { withTransaction } = require('../db/pg');
 const users = require('../db/repositories/userRepository');
-const ENABLE_FACTORY_RESET = process.env.ENABLE_FACTORY_RESET === 'true';
 
 const validateSetup = [
   body('nombre').trim().notEmpty(),
@@ -82,71 +81,7 @@ async function createAdmin(req, res) {
   }
 }
 
-
-const fs = require('fs');
-const { run: runMigrations } = require('../scripts/migrate');
-const { pool, dbPath } = require('../db/pg');
-const backupService = require('../services/backupService');
-
-async function resetDatabase(req, res) {
-  if (!ENABLE_FACTORY_RESET) {
-    return res.status(403).json({ error: 'Reset de base deshabilitado' });
-  }
-  // Aquí idealmente verificaríamos que el usuario sea Admin desde middleware,
-  // pero como es una ruta crítica, doble chequeamos o asumimos middleware previo.
-  try {
-    console.log('Iniciando Factory Reset...');
-
-    // 1. Cerrar conexión
-    await pool.end();
-    console.log('Conexión cerrada.');
-
-    // 2. Borrar archivo
-    if (fs.existsSync(dbPath)) {
-      fs.unlinkSync(dbPath);
-      console.log('Base de datos eliminada:', dbPath);
-    }
-
-    // 3. Reconectar (crea archivo vacío)
-    await pool.reconnect();
-
-    // 4. Correr migraciones
-    await runMigrations();
-
-    res.json({ ok: true, message: 'Base de datos reiniciada correctamente' });
-  } catch (e) {
-    console.error('Error en Factory Reset:', e);
-    // Intentar reconectar por si falló algo intermedio para no dejar muerto el server
-    try { await pool.reconnect(); } catch (_) { }
-    res.status(500).json({ error: 'Fallo el reseteo de fabrica: ' + e.message });
-  }
-}
-
-async function restoreBackup(req, res) {
-  const file = req.file;
-  if (!file || !file.path) {
-    return res.status(400).json({ error: 'Archivo requerido' });
-  }
-  try {
-    const hasAdmin = await users.hasAdmin();
-    if (hasAdmin) {
-      return res.status(403).json({ error: 'Setup ya completado' });
-    }
-    const info = await backupService.restoreFromUpload(file.path, file.originalname);
-    return res.json({ message: 'Backup restaurado', backup: info });
-  } catch (e) {
-    console.error('Setup restore error:', e.message);
-    return res.status(500).json({ error: 'No se pudo restaurar el backup' });
-  } finally {
-    try {
-      fs.unlinkSync(file.path);
-    } catch (_) {}
-  }
-}
-
 module.exports = {
   status,
   createAdmin: [...validateSetup, createAdmin],
-  resetDatabase,
-  restoreBackup,
 };

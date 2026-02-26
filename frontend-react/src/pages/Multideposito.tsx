@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Api, apiFetch } from '../lib/api';
 import Alert from '../components/Alert';
+import ProductPicker from '../components/ProductPicker';
 
 type Deposito = {
   id: number;
@@ -71,6 +72,17 @@ export default function Multideposito() {
   const depositoSeleccionado = useMemo(
     () => depositos.find((d) => d.id === Number(selectedDepositoId)) || null,
     [depositos, selectedDepositoId],
+  );
+  const transferProductOptions = useMemo(
+    () =>
+      inventario.map((r) => ({
+        id: r.producto_id,
+        name: r.nombre,
+        codigo: r.codigo,
+        category_name: r.categoria,
+        stock_quantity: r.cantidad_disponible,
+      })),
+    [inventario],
   );
 
   async function loadDepositos() {
@@ -727,26 +739,13 @@ export default function Multideposito() {
                       <label className="block text-[11px] text-slate-400 mb-1">
                         Producto
                       </label>
-                      <select
-                        className="input-modern text-xs md:text-sm w-full"
-                        value={
-                          transferProductoId === ''
-                            ? ''
-                            : String(transferProductoId)
-                        }
-                        onChange={(e) =>
-                          setTransferProductoId(
-                            e.target.value ? Number(e.target.value) : '',
-                          )
-                        }
-                      >
-                        <option value="">Seleccionar...</option>
-                        {inventario.map((r) => (
-                          <option key={r.producto_id} value={r.producto_id}>
-                            {r.nombre}
-                          </option>
-                        ))}
-                      </select>
+                      <ProductPicker
+                        options={transferProductOptions}
+                        value={transferProductoId === '' ? null : Number(transferProductoId)}
+                        onChange={(id) => setTransferProductoId(id == null ? '' : Number(id))}
+                        placeholder="Seleccionar..."
+                        buttonClassName="h-10 text-xs md:text-sm"
+                      />
                     </div>
                     <div>
                       <label className="block text-[11px] text-slate-400 mb-1">
@@ -815,4 +814,3 @@ export default function Multideposito() {
     </div>
   );
 }
-

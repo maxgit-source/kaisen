@@ -21,7 +21,6 @@ const xss = require('xss-clean');
 const compression = require('compression');
 const path = require('path');
 const hpp = require('hpp');
-const networkGuard = require('./middlewares/networkMiddleware');
 
 const {
   apiLimiter,
@@ -64,13 +63,9 @@ const adminRoutes = require('./routes/adminroutes.js');
 const depositoRoutes = require('./routes/depositoroutes.js');
 const zonasRoutes = require('./routes/zonasroutes.js');
 const marketplaceRoutes = require('./routes/marketplaceroutes.js');
-const licenseRoutes = require('./routes/licenseroutes.js');
-const backupRoutes = require('./routes/backuproutes.js');
 const arcaRoutes = require('./routes/arcaroutes.js');
-const cloudRoutes = require('./routes/cloudroutes.js');
-const backupService = require('./services/backupService');
-const cloudSyncService = require('./services/cloudSyncService');
-const licenseService = require('./services/licenseService');
+const ownerRoutes = require('./routes/ownerroutes.js');
+const pricingRoutes = require('./routes/pricingroutes.js');
 
 // ==============================
 //   CONFIG SERVER
@@ -162,12 +157,12 @@ const corsAllowAll =
   process.env.CORS_ALLOWED_ORIGINS === '*';
 
 const allowNullOrigin =
-  process.env.CORS_ALLOW_NULL === 'true' ||
-  (process.env.CORS_ALLOW_NULL !== 'false' && process.env.NODE_ENV !== 'production');
+  process.env.CORS_ALLOW_NULL === 'true';
 
 function corsOrigin(origin, callback) {
   if (corsAllowAll) return callback(null, true);
-  if (!origin || origin === 'null') {
+  if (!origin) return callback(null, true);
+  if (origin === 'null') {
     return allowNullOrigin
       ? callback(null, true)
       : callback(new Error('No permitido por CORS'));
@@ -199,7 +194,6 @@ app.use(hpp());
 //   LOG + PROTECCIÓN PATH TRAVERSAL
 // ==============================
 app.use(pathTraversalProtection);
-app.use('/api', networkGuard);
 
 // ==============================
 //   GLOBAL RATE LIMIT ANTES DE RUTAS
@@ -251,10 +245,9 @@ app.use('/api', adminRoutes);
 app.use('/api', depositoRoutes);
 app.use('/api', zonasRoutes);
 app.use('/api', marketplaceRoutes);
-app.use('/api', licenseRoutes);
-app.use('/api', backupRoutes);
 app.use('/api', arcaRoutes);
-app.use('/api', cloudRoutes);
+app.use('/api', ownerRoutes);
+app.use('/api', pricingRoutes);
 
 // ==============================
 //   RUTA DEFAULT
@@ -293,11 +286,6 @@ function startServer({ port = PORT, host = HOST } = {}) {
   // Keep alive para Render
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
-  backupService.startBackupScheduler();
-  cloudSyncService.startCloudSyncScheduler();
-  licenseService.ensureDemoStart().catch((err) => {
-    console.error('Error iniciando demo:', err?.message || err);
-  });
   return server;
 }
 

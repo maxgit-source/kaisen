@@ -10,6 +10,7 @@ const validateCreateOrUpdate = [
   check('telefono').optional().isString(),
   check('email').optional().isEmail(),
   check('direccion').optional().isString(),
+  check('entre_calles').optional().isString().isLength({ max: 255 }),
   check('cuit_cuil').optional().isString(),
   check('tipo_doc').optional().isString(),
   check('nro_doc').optional().isString(),
@@ -39,7 +40,7 @@ const validateCreateInitialDebtPayment = [
 
 async function list(req, res) {
   try {
-    const { q, estado, tipo_cliente, segmento, limit, offset, all } = req.query || {};
+    const { q, estado, tipo_cliente, segmento, limit, offset, all, view } = req.query || {};
     const allowAll = String(all || '') === '1';
     const effectiveLimit = allowAll && (limit == null || limit === '') ? 10000 : limit;
     const rows = await repo.list({
@@ -50,6 +51,7 @@ async function list(req, res) {
       limit: effectiveLimit,
       offset,
       allowAll,
+      view,
     });
     res.json(rows);
   } catch (e) {

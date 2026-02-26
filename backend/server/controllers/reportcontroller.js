@@ -178,6 +178,18 @@ function getFontColorForHex(hex) {
   return luminance < 150 ? 'FFFFFF' : '0F172A';
 }
 
+function excelColumnName(index) {
+  let n = Number(index) || 0;
+  if (n <= 0) return 'A';
+  let out = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
 async function getPriceLabelsForReport() {
   try {
     const { getTextParam } = require('../db/repositories/configRepository');
@@ -989,31 +1001,44 @@ async function movimientosVentasExcel(req, res) {
       where.push(`v.usuario_id = $${params.length}`);
     }
 
-      const { rows } = await query(
-        `SELECT v.id AS venta_id,
-                v.fecha,
-                v.neto AS total_venta,
-                v.impuestos AS iva,
-                c.nombre AS cliente_nombre,
-                c.apellido AS cliente_apellido,
-                c.localidad,
-                c.direccion,
-                z.nombre AS zona_nombre,
-                z.color_hex AS zona_color,
-                u.nombre AS vendedor_nombre,
-                COALESCE(pagos.total_pagado, 0) AS total_pagado
-           FROM ventas v
-           JOIN clientes c ON c.id = v.cliente_id
-      LEFT JOIN zonas z ON z.id = c.zona_id
+    const { rows } = await query(
+      `SELECT v.id AS venta_id,
+              v.fecha,
+              v.neto AS total_venta,
+              v.impuestos AS iva,
+              v.estado_pago,
+              v.estado_entrega,
+              c.id AS cliente_id,
+              c.nombre AS cliente_nombre,
+              c.apellido AS cliente_apellido,
+              c.telefono,
+              c.email,
+              c.localidad,
+              c.provincia,
+              c.codigo_postal,
+              c.direccion,
+              c.entre_calles,
+              c.cuit_cuil,
+              c.tipo_doc,
+              c.nro_doc,
+              c.condicion_iva,
+              c.domicilio_fiscal,
+              z.nombre AS zona_nombre,
+              z.color_hex AS zona_color,
+              u.nombre AS vendedor_nombre,
+              COALESCE(pagos.total_pagado, 0) AS total_pagado
+         FROM ventas v
+         JOIN clientes c ON c.id = v.cliente_id
+    LEFT JOIN zonas z ON z.id = c.zona_id
     LEFT JOIN usuarios u ON u.id = v.usuario_id
     LEFT JOIN (
-              SELECT venta_id, SUM(monto) AS total_pagado
-                FROM pagos
-               WHERE venta_id IS NOT NULL
-               GROUP BY venta_id
-             ) pagos ON pagos.venta_id = v.id
-        WHERE ${where.join(' AND ')}
-        ORDER BY date(v.fecha, 'localtime') ASC, v.id ASC`,
+            SELECT venta_id, SUM(monto) AS total_pagado
+              FROM pagos
+             WHERE venta_id IS NOT NULL
+             GROUP BY venta_id
+           ) pagos ON pagos.venta_id = v.id
+      WHERE ${where.join(' AND ')}
+      ORDER BY date(v.fecha, 'localtime') ASC, v.id ASC`,
       params
     );
 
@@ -1032,16 +1057,39 @@ async function movimientosVentasExcel(req, res) {
       workbook.creator = 'Sistema de gestion';
       workbook.created = new Date();
 
-      const columns = [
-        { key: 'cliente', width: 28 },
-        { key: 'zona', width: 18 },
-        { key: 'compra', width: 20 },
-        { key: 'localidad', width: 18 },
-        { key: 'direccion', width: 36 },
-        { key: 'iva', width: 12 },
-        { key: 'vendedor', width: 20 },
-        { key: 'total', width: 16 },
-      ];
+    const columns = [
+      { key: 'venta_id', title: 'Venta', width: 10 },
+      { key: 'fecha', title: 'Fecha venta', width: 20 },
+      { key: 'remito', title: 'Remito', width: 18 },
+      { key: 'estado_entrega', title: 'Estado entrega', width: 16 },
+      { key: 'estado_pago', title: 'Estado pago', width: 14 },
+      { key: 'cliente_id', title: 'Cliente ID', width: 10 },
+      { key: 'cliente', title: 'Cliente', width: 28 },
+      { key: 'telefono', title: 'Telefono', width: 18 },
+      { key: 'email', title: 'Email', width: 28 },
+      { key: 'zona', title: 'Zona', width: 16 },
+      { key: 'provincia', title: 'Provincia', width: 16 },
+      { key: 'localidad', title: 'Localidad', width: 18 },
+      { key: 'codigo_postal', title: 'Codigo postal', width: 14 },
+      { key: 'direccion', title: 'Direccion', width: 38 },
+      { key: 'entre_calles', title: 'Entre calles', width: 28 },
+      { key: 'domicilio_fiscal', title: 'Domicilio fiscal', width: 32 },
+      { key: 'cuit_cuil', title: 'CUIT/CUIL', width: 16 },
+      { key: 'tipo_doc', title: 'Tipo doc', width: 12 },
+      { key: 'nro_doc', title: 'Nro doc', width: 14 },
+      { key: 'condicion_iva', title: 'Condicion IVA', width: 16 },
+      { key: 'vendedor', title: 'Vendedor', width: 22 },
+      { key: 'total_venta', title: 'Total venta', width: 14 },
+      { key: 'iva', title: 'IVA', width: 12 },
+      { key: 'total_pagado', title: 'Total pagado', width: 14 },
+      { key: 'saldo_pendiente', title: 'Saldo pendiente', width: 15 },
+    ];
+    const moneyKeys = new Set(['total_venta', 'iva', 'total_pagado', 'saldo_pendiente']);
+    const rightAlignKeys = new Set([...moneyKeys, 'venta_id', 'cliente_id']);
+    const wrapKeys = new Set(['direccion', 'entre_calles', 'domicilio_fiscal']);
+    const remitoColIndex = columns.findIndex((c) => c.key === 'remito') + 1;
+    const zonaColIndex = columns.findIndex((c) => c.key === 'zona') + 1;
+    const lastColName = excelColumnName(columns.length);
       const border = {
         top: { style: 'thin', color: { argb: 'E2E8F0' } },
         left: { style: 'thin', color: { argb: 'E2E8F0' } },
@@ -1071,7 +1119,7 @@ async function movimientosVentasExcel(req, res) {
       });
 
       const title = formatMovimientosTitle(range);
-      sheet.mergeCells('A1:H1');
+      sheet.mergeCells(`A1:${lastColName}1`);
       const titleCell = sheet.getCell('A1');
       titleCell.value = title;
       titleCell.font = { size: 18, bold: true, color: { argb: 'FFFFFF' } };
@@ -1079,9 +1127,9 @@ async function movimientosVentasExcel(req, res) {
       titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '111827' } };
       sheet.getRow(1).height = 28;
 
-      sheet.mergeCells('A2:H2');
+      sheet.mergeCells(`A2:${lastColName}2`);
       const subtitleCell = sheet.getCell('A2');
-      subtitleCell.value = `Rango: ${range.fromStr} a ${range.toStr} | ${zonaLabel} | Generado: ${formatTimestamp(new Date())}`;
+      subtitleCell.value = `Rango: ${range.fromStr} a ${range.toStr} | ${zonaLabel} | Incluye entregadas y pendientes | Generado: ${formatTimestamp(new Date())}`;
       subtitleCell.font = { size: 10, italic: true, color: { argb: '334155' } };
       subtitleCell.alignment = { vertical: 'middle', horizontal: 'center' };
       sheet.getRow(2).height = 18;
@@ -1111,7 +1159,7 @@ async function movimientosVentasExcel(req, res) {
       });
 
       const headerRow = sheet.getRow(headerRowIndex);
-      headerRow.values = ['Cliente', 'Zona', 'Compra', 'Localidad', 'Direccion', 'IVA', 'Vendedor', 'Total (pago)'];
+      headerRow.values = columns.map((c) => c.title);
       headerRow.height = 22;
       headerRow.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFF' } };
@@ -1119,22 +1167,25 @@ async function movimientosVentasExcel(req, res) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0EA5E9' } };
         cell.border = border;
       });
-      sheet.autoFilter = { from: `A${headerRowIndex}`, to: `H${headerRowIndex}` };
+      sheet.autoFilter = { from: `A${headerRowIndex}`, to: `${lastColName}${headerRowIndex}` };
 
       if (!rows.length) {
         const emptyRow = sheet.getRow(dataStartRow);
-        emptyRow.values = ['Sin movimientos', '', '', '', '', 0, '', 0];
+        emptyRow.values = columns.map((_, idx) => (idx === 0 ? 'Sin movimientos' : ''));
         emptyRow.eachCell((cell, col) => {
           cell.border = border;
+          const key = columns[col - 1]?.key;
           cell.alignment = {
             vertical: 'middle',
-          horizontal: col === 6 || col === 8 ? 'right' : 'left',
-          wrapText: false,
-        };
-      });
-      emptyRow.getCell(6).numFmt = '"$"#,##0.00';
-      emptyRow.getCell(8).numFmt = '"$"#,##0.00';
-    } else {
+            horizontal: rightAlignKeys.has(key) ? 'right' : 'left',
+            wrapText: wrapKeys.has(key),
+          };
+          if (moneyKeys.has(key)) {
+            cell.value = 0;
+            cell.numFmt = '"$"#,##0.00';
+          }
+        });
+      } else {
         let rowIndex = dataStartRow;
         for (const row of rows) {
           const clienteNombre = `${row.cliente_nombre || ''} ${row.cliente_apellido || ''}`.trim();
@@ -1142,49 +1193,70 @@ async function movimientosVentasExcel(req, res) {
           const zonaColor = normalizeHexColor(row.zona_color);
           const zonaRowColor = zonaColor ? blendWithWhite(zonaColor, 0.85) : null;
           const remitoLabel = `Remito #${row.venta_id}`;
-          const localidad = row.localidad || '';
-          const direccion = row.direccion || '';
+          const fechaVenta = row.fecha ? formatTimestamp(new Date(row.fecha)) : '';
           const iva = Number(row.iva || 0);
-          const vendedor = row.vendedor_nombre || '';
+          const totalVenta = Number(row.total_venta || 0);
           const totalPagado = Number(row.total_pagado || 0);
-
-        const sheetRow = sheet.getRow(rowIndex);
-        sheetRow.values = [
-          clienteNombre,
-          zonaNombre,
-          remitoLabel,
-          localidad,
-          direccion,
-          iva,
-          vendedor,
-          totalPagado,
-        ];
-        sheetRow.height = 20;
-        const isEven = rowIndex % 2 === 0;
-        sheetRow.eachCell((cell, col) => {
-          cell.border = border;
-          cell.alignment = {
-            vertical: 'middle',
-            horizontal: col === 6 || col === 8 ? 'right' : 'left',
-            wrapText: col === 5,
+          const saldoPendiente = Math.max(0, totalVenta - totalPagado);
+          const vendedor = row.vendedor_nombre || '';
+          const valuesByKey = {
+            venta_id: Number(row.venta_id || 0),
+            fecha: fechaVenta,
+            remito: remitoLabel,
+            estado_entrega: row.estado_entrega || 'pendiente',
+            estado_pago: row.estado_pago || 'pendiente',
+            cliente_id: Number(row.cliente_id || 0),
+            cliente: clienteNombre,
+            telefono: row.telefono || '',
+            email: row.email || '',
+            zona: zonaNombre,
+            provincia: row.provincia || '',
+            localidad: row.localidad || '',
+            codigo_postal: row.codigo_postal || '',
+            direccion: row.direccion || '',
+            entre_calles: row.entre_calles || '',
+            domicilio_fiscal: row.domicilio_fiscal || '',
+            cuit_cuil: row.cuit_cuil || '',
+            tipo_doc: row.tipo_doc || '',
+            nro_doc: row.nro_doc || '',
+            condicion_iva: row.condicion_iva || '',
+            vendedor,
+            total_venta: totalVenta,
+            iva,
+            total_pagado: totalPagado,
+            saldo_pendiente: saldoPendiente,
           };
+
+          const sheetRow = sheet.getRow(rowIndex);
+          sheetRow.values = columns.map((c) => valuesByKey[c.key]);
+          sheetRow.height = 20;
+          const isEven = rowIndex % 2 === 0;
+          sheetRow.eachCell((cell, col) => {
+            const key = columns[col - 1]?.key;
+            cell.border = border;
+            cell.alignment = {
+              vertical: 'middle',
+              horizontal: rightAlignKeys.has(key) ? 'right' : 'left',
+              wrapText: wrapKeys.has(key),
+            };
             if (zonaRowColor) {
               cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${zonaRowColor}` } };
             } else if (isEven) {
               cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F8FAFC' } };
             }
+            if (moneyKeys.has(key)) {
+              cell.numFmt = '"$"#,##0.00';
+            }
           });
-          sheetRow.getCell(6).numFmt = '"$"#,##0.00';
-          sheetRow.getCell(8).numFmt = '"$"#,##0.00';
 
           if (remitoBase) {
-            const remitoCell = sheetRow.getCell(3);
+            const remitoCell = sheetRow.getCell(remitoColIndex);
             remitoCell.value = { text: remitoLabel, hyperlink: `${remitoBase}${row.venta_id}` };
             remitoCell.font = { color: { argb: '2563EB' }, underline: true };
           }
 
           if (zonaColor) {
-            const zonaCell = sheetRow.getCell(2);
+            const zonaCell = sheetRow.getCell(zonaColIndex);
             zonaCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${zonaColor}` } };
             zonaCell.font = { bold: true, color: { argb: getFontColorForHex(zonaColor) } };
             zonaCell.alignment = { vertical: 'middle', horizontal: 'center' };
@@ -1399,11 +1471,32 @@ async function remitoPdf(req, res) {
     const observaciones = req.query?.observaciones ? String(req.query.observaciones).trim() : '';
 
     const header = await query(
-      `SELECT v.id, v.fecha, v.total::float AS total, v.descuento::float AS descuento, v.impuestos::float AS impuestos,
-              v.neto::float AS neto, v.estado_pago, v.estado_entrega,
-              c.nombre AS cliente_nombre, COALESCE(c.apellido,'') AS cliente_apellido
+      `SELECT v.id,
+              v.fecha,
+              v.total::float AS total,
+              v.descuento::float AS descuento,
+              v.impuestos::float AS impuestos,
+              v.neto::float AS neto,
+              v.estado_pago,
+              v.estado_entrega,
+              c.nombre AS cliente_nombre,
+              COALESCE(c.apellido,'') AS cliente_apellido,
+              c.telefono,
+              c.email,
+              c.direccion,
+              c.entre_calles,
+              c.cuit_cuil,
+              c.tipo_doc,
+              c.nro_doc,
+              c.condicion_iva,
+              c.domicilio_fiscal,
+              c.provincia,
+              c.localidad,
+              c.codigo_postal,
+              z.nombre AS zona_nombre
          FROM ventas v
          JOIN clientes c ON c.id = v.cliente_id
+    LEFT JOIN zonas z ON z.id = c.zona_id
         WHERE v.id = $1
         LIMIT 1`,
       [id]
@@ -1412,7 +1505,10 @@ async function remitoPdf(req, res) {
     const h = header.rows[0];
 
     const detalle = await query(
-      `SELECT d.cantidad, d.precio_unitario::float AS precio_unitario, p.nombre AS producto_nombre
+      `SELECT d.cantidad,
+              d.precio_unitario::float AS precio_unitario,
+              d.subtotal::float AS subtotal,
+              p.nombre AS producto_nombre
          FROM ventas_detalle d
          JOIN productos p ON p.id = d.producto_id
         WHERE d.venta_id = $1
@@ -1426,8 +1522,12 @@ async function remitoPdf(req, res) {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     doc.pipe(res);
 
-    const company = process.env.COMPANY_NAME || 'Sistemas de Gestion';
-    const companyExtra = process.env.COMPANY_ADDRESS || '';
+    const [remitoTitleCfg, remitoSubtitleCfg] = await Promise.all([
+      configRepo.getTextParam('remito_titulo').catch(() => null),
+      configRepo.getTextParam('remito_subtitulo').catch(() => null),
+    ]);
+    const company = String(remitoTitleCfg || process.env.COMPANY_NAME || 'Grupo kaisen').trim() || 'Grupo kaisen';
+    const companyExtra = String(remitoSubtitleCfg || process.env.COMPANY_ADDRESS || '').trim();
     const margin = doc.page.margins.left;
     const rightMargin = doc.page.margins.right;
     const pageWidth = doc.page.width;
@@ -1436,70 +1536,90 @@ async function remitoPdf(req, res) {
 
     const fecha = new Date(h.fecha);
     const f = `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-${String(fecha.getDate()).padStart(2, '0')} ${String(fecha.getHours()).padStart(2, '0')}:${String(fecha.getMinutes()).padStart(2, '0')}`;
-    const cliente = `${h.cliente_nombre}${h.cliente_apellido ? ' ' + h.cliente_apellido : ''}`;
-
-    const drawHLine = (y, color = '#0f172a') => {
-      doc.moveTo(margin, y).lineTo(pageWidth - rightMargin, y).strokeColor(color).lineWidth(1).stroke();
+    const clienteNombre = `${h.cliente_nombre}${h.cliente_apellido ? ` ${h.cliente_apellido}` : ''}`.trim();
+    const fallback = (value) => {
+      const v = value == null ? '' : String(value).trim();
+      return v || '-';
     };
 
-    // Header
-    doc.font('Helvetica-Bold').fontSize(18).fillColor('#0f172a').text(company, margin, margin);
+    const drawRowLabelValue = (xLabel, xValue, y, label, value, valueWidth) => {
+      doc.font('Helvetica').fontSize(8.5).fillColor('#64748b').text(label, xLabel, y, { width: xValue - xLabel - 6 });
+      doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#0f172a').text(value, xValue, y, { width: valueWidth });
+    };
+
+    // Header block
+    doc.rect(margin, margin, contentWidth, 66).fill('#0F172A');
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(20).text(company, margin + 14, margin + 14);
     if (companyExtra) {
-      doc.font('Helvetica').fontSize(9).fillColor('#475569').text(companyExtra, margin, doc.y + 2);
-    }
-
-    const boxWidth = 210;
-    const boxHeight = 60;
-    const boxX = pageWidth - rightMargin - boxWidth;
-    const boxY = margin;
-    doc.rect(boxX, boxY, boxWidth, boxHeight).strokeColor('#0f172a').lineWidth(1).stroke();
-    doc.font('Helvetica').fontSize(9).fillColor('#475569');
-    doc.text('Remito', boxX + 10, boxY + 8);
-    doc.font('Helvetica-Bold').fontSize(14).fillColor('#0f172a');
-    doc.text(`Nro ${h.id}`, boxX + 10, boxY + 20);
-    doc.font('Helvetica').fontSize(9).fillColor('#475569');
-    doc.text(`Fecha: ${f}`, boxX + 10, boxY + 40);
-
-    doc.y = Math.max(doc.y, boxY + boxHeight) + 10;
-    doc.font('Helvetica-Bold').fontSize(14).fillColor('#0f172a').text('Remito de entrega', margin, doc.y);
-    drawHLine(doc.y + 6, '#94a3b8');
-    doc.moveDown(1);
-
-    // Info table
-    const infoTop = doc.y + 4;
-    const infoHeight = 60;
-    const colWidth = contentWidth / 2;
-    doc.rect(margin, infoTop, contentWidth, infoHeight).strokeColor('#cbd5e1').lineWidth(1).stroke();
-    doc.moveTo(margin + colWidth, infoTop).lineTo(margin + colWidth, infoTop + infoHeight).strokeColor('#cbd5e1').stroke();
-    doc.moveTo(margin, infoTop + infoHeight / 2).lineTo(margin + contentWidth, infoTop + infoHeight / 2).strokeColor('#cbd5e1').stroke();
-
-    doc.font('Helvetica').fontSize(9).fillColor('#64748b');
-    doc.text('Cliente', margin + 8, infoTop + 6);
-    doc.text('Fecha', margin + colWidth + 8, infoTop + 6);
-    doc.text('Estado entrega', margin + 8, infoTop + infoHeight / 2 + 6);
-    doc.text('Estado pago', margin + colWidth + 8, infoTop + infoHeight / 2 + 6);
-
-    doc.font('Helvetica-Bold').fontSize(11).fillColor('#0f172a');
-    doc.text(cliente, margin + 8, infoTop + 18, { width: colWidth - 16 });
-    doc.text(f, margin + colWidth + 8, infoTop + 18, { width: colWidth - 16 });
-    doc.text(h.estado_entrega || 'pendiente', margin + 8, infoTop + infoHeight / 2 + 18, { width: colWidth - 16 });
-    doc.text(h.estado_pago || 'pendiente', margin + colWidth + 8, infoTop + infoHeight / 2 + 18, { width: colWidth - 16 });
-
-    doc.y = infoTop + infoHeight + 16;
-
-    if (observaciones) {
-      doc.font('Helvetica-Bold').fontSize(11).fillColor('#0f172a').text('Observaciones');
-      doc.font('Helvetica').fontSize(10).fillColor('#0f172a').text(observaciones, {
-        width: contentWidth,
+      doc.font('Helvetica').fontSize(9.5).fillColor('#E2E8F0').text(companyExtra, margin + 14, margin + 40, {
+        width: contentWidth - 28,
       });
-      doc.moveDown(0.6);
     }
 
-    // Separator before details
-    const sepY = doc.y;
-    doc.font('Helvetica-Bold').fontSize(14).fillColor('#0f172a').text('X', margin, sepY);
-    doc.moveTo(margin + 16, sepY + 8).lineTo(pageWidth - rightMargin, sepY + 8).strokeColor('#0f172a').lineWidth(1).stroke();
-    doc.y = sepY + 18;
+    const pillWidth = 215;
+    const pillHeight = 46;
+    const pillX = margin + contentWidth - pillWidth - 10;
+    const pillY = margin + 10;
+    doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 8).fill('#111827');
+    doc.font('Helvetica').fontSize(9).fillColor('#CBD5E1').text('Remito de entrega', pillX + 10, pillY + 8);
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('#FFFFFF').text(`Nro ${h.id}`, pillX + 10, pillY + 20);
+    doc.font('Helvetica').fontSize(9).fillColor('#CBD5E1').text(f, pillX + 105, pillY + 22, { width: 98, align: 'right' });
+
+    let cursorY = margin + 76;
+
+    // Venta summary
+    doc.roundedRect(margin, cursorY, contentWidth, 52, 8).fillAndStroke('#F8FAFC', '#CBD5E1');
+    drawRowLabelValue(margin + 10, margin + 95, cursorY + 8, 'Cliente', fallback(clienteNombre), contentWidth / 2 - 100);
+    drawRowLabelValue(margin + 10, margin + 95, cursorY + 28, 'Estado entrega', fallback(h.estado_entrega || 'pendiente'), contentWidth / 2 - 100);
+    drawRowLabelValue(margin + contentWidth / 2 + 8, margin + contentWidth / 2 + 95, cursorY + 8, 'Estado pago', fallback(h.estado_pago || 'pendiente'), contentWidth / 2 - 100);
+    drawRowLabelValue(margin + contentWidth / 2 + 8, margin + contentWidth / 2 + 95, cursorY + 28, 'Fecha venta', fallback(f), contentWidth / 2 - 100);
+    cursorY += 64;
+
+    // Cliente detail block
+    doc.roundedRect(margin, cursorY, contentWidth, 158, 8).fillAndStroke('#FFFFFF', '#CBD5E1');
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#0f172a').text('Datos completos del cliente', margin + 10, cursorY + 8);
+    doc.moveTo(margin + 10, cursorY + 24).lineTo(margin + contentWidth - 10, cursorY + 24).strokeColor('#E2E8F0').lineWidth(1).stroke();
+
+    const leftXLabel = margin + 10;
+    const leftXValue = margin + 90;
+    const rightXLabel = margin + contentWidth / 2 + 8;
+    const rightXValue = margin + contentWidth / 2 + 96;
+    const colWidth = contentWidth / 2 - 106;
+    const rowGap = 18;
+    const topRowsY = cursorY + 30;
+
+    const leftRows = [
+      ['Telefono', fallback(h.telefono)],
+      ['Email', fallback(h.email)],
+      ['Direccion', fallback(h.direccion)],
+      ['Entre calles', fallback(h.entre_calles)],
+      ['Localidad', fallback(h.localidad)],
+      ['Provincia', fallback(h.provincia)],
+      ['Codigo postal', fallback(h.codigo_postal)],
+    ];
+    const rightRows = [
+      ['Zona', fallback(h.zona_nombre)],
+      ['CUIT/CUIL', fallback(h.cuit_cuil)],
+      ['Tipo doc', fallback(h.tipo_doc)],
+      ['Nro doc', fallback(h.nro_doc)],
+      ['Condicion IVA', fallback(h.condicion_iva)],
+      ['Domicilio fiscal', fallback(h.domicilio_fiscal)],
+      ['Observaciones', fallback(observaciones)],
+    ];
+
+    leftRows.forEach(([label, value], idx) => {
+      drawRowLabelValue(leftXLabel, leftXValue, topRowsY + rowGap * idx, label, value, colWidth);
+    });
+    rightRows.forEach(([label, value], idx) => {
+      drawRowLabelValue(rightXLabel, rightXValue, topRowsY + rowGap * idx, label, value, colWidth);
+    });
+
+    cursorY += 170;
+
+    doc.font('Helvetica-Bold').fontSize(12).fillColor('#0f172a').text('Detalle de productos', margin, cursorY);
+    cursorY += 8;
+    doc.moveTo(margin, cursorY).lineTo(pageWidth - rightMargin, cursorY).strokeColor('#CBD5E1').lineWidth(1).stroke();
+    cursorY += 8;
 
     // Table header
     const tableX = margin;
@@ -1524,14 +1644,14 @@ async function remitoPdf(req, res) {
       return y + 20;
     };
 
-    let y = drawTableHeader(doc.y);
+    let y = drawTableHeader(cursorY);
     doc.font('Helvetica').fontSize(10).fillColor('#0f172a');
 
     let calcSubtotal = 0;
     for (const it of detalle.rows) {
       const cantidad = Number(it.cantidad) || 0;
       const unit = Number(it.precio_unitario) || 0;
-      const sub = cantidad * unit;
+      const sub = Number(it.subtotal || cantidad * unit);
       calcSubtotal += sub;
 
       const desc = String(it.producto_nombre || '');
@@ -1557,7 +1677,7 @@ async function remitoPdf(req, res) {
       y += rowHeight;
     }
 
-    const totalsBoxWidth = 220;
+    const totalsBoxWidth = 240;
     const totalsX = tableX + tableWidth - totalsBoxWidth;
     let totalsY = y + 14;
     if (totalsY + 80 > pageHeight - doc.page.margins.bottom) {
@@ -1577,7 +1697,7 @@ async function remitoPdf(req, res) {
     doc.text('Total', totalsX + 10, totalsY + 8 + lineH * 3);
     doc.text(`$ ${(h.neto || h.total || 0).toFixed(2)}`, totalsX + 10, totalsY + 8 + lineH * 3, { width: totalsBoxWidth - 20, align: 'right' });
     doc.font('Helvetica').fontSize(9).fillColor('#475569');
-    doc.text('Documento generado por el sistema.', margin, totalsY + 90);
+    doc.text(`Documento generado por ${company}.`, margin, totalsY + 92);
 
     doc.end();
   } catch (e) {

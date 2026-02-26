@@ -34,6 +34,7 @@ backend/database/backups/
 /backend/server/keys/*.pem
 /backend/server/.env
 /backend/server/.env.*
+!/backend/server/.env.example
 
 # Editor/OS
 .idea/

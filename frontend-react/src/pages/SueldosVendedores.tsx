@@ -71,6 +71,16 @@ type RankingResponse = {
   items: RankingItem[];
 };
 
+type ComisionListConfig = {
+  mode: 'producto' | 'lista';
+  porcentajes: {
+    local: number;
+    distribuidor: number;
+    final: number;
+    oferta: number;
+  };
+};
+
 function formatMoney(value: number) {
   return new Intl.NumberFormat('es-AR', {
     style: 'currency',
@@ -135,6 +145,14 @@ export default function SueldosVendedores() {
   const [ranking, setRanking] = useState<RankingResponse | null>(null);
   const [rankingLoading, setRankingLoading] = useState(false);
   const [rankingError, setRankingError] = useState<string | null>(null);
+  const [comisionConfig, setComisionConfig] = useState<ComisionListConfig>({
+    mode: 'producto',
+    porcentajes: { local: 0, distribuidor: 0, final: 0, oferta: 0 },
+  });
+  const [comisionConfigLoading, setComisionConfigLoading] = useState(false);
+  const [comisionConfigSaving, setComisionConfigSaving] = useState(false);
+  const [comisionConfigError, setComisionConfigError] = useState<string | null>(null);
+  const [comisionConfigSuccess, setComisionConfigSuccess] = useState<string | null>(null);
 
   const [comisionForm, setComisionForm] = useState({
     porcentaje: '',
@@ -247,6 +265,31 @@ export default function SueldosVendedores() {
   }, []);
 
   useEffect(() => {
+    (async () => {
+      setComisionConfigLoading(true);
+      setComisionConfigError(null);
+      try {
+        const data: any = await Api.getComisionListasConfig();
+        setComisionConfig({
+          mode: data?.mode === 'lista' ? 'lista' : 'producto',
+          porcentajes: {
+            local: Number(data?.porcentajes?.local || 0),
+            distribuidor: Number(data?.porcentajes?.distribuidor || 0),
+            final: Number(data?.porcentajes?.final || 0),
+            oferta: Number(data?.porcentajes?.oferta || 0),
+          },
+        });
+      } catch (e) {
+        setComisionConfigError(
+          e instanceof Error ? e.message : 'No se pudo cargar la configuracion de comisiones'
+        );
+      } finally {
+        setComisionConfigLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     if (selectedId) {
       loadDetalle(selectedId);
     }
@@ -308,6 +351,42 @@ export default function SueldosVendedores() {
     }
   }
 
+  async function guardarConfigComisionListas() {
+    setComisionConfigSaving(true);
+    setComisionConfigError(null);
+    setComisionConfigSuccess(null);
+    try {
+      const payload = {
+        mode: comisionConfig.mode,
+        porcentajes: {
+          local: Number(comisionConfig.porcentajes.local || 0),
+          distribuidor: Number(comisionConfig.porcentajes.distribuidor || 0),
+          final: Number(comisionConfig.porcentajes.final || 0),
+          oferta: Number(comisionConfig.porcentajes.oferta || 0),
+        },
+      };
+      const saved: any = await Api.setComisionListasConfig(payload);
+      setComisionConfig({
+        mode: saved?.mode === 'lista' ? 'lista' : 'producto',
+        porcentajes: {
+          local: Number(saved?.porcentajes?.local || 0),
+          distribuidor: Number(saved?.porcentajes?.distribuidor || 0),
+          final: Number(saved?.porcentajes?.final || 0),
+          oferta: Number(saved?.porcentajes?.oferta || 0),
+        },
+      });
+      setComisionConfigSuccess('Configuracion de comisiones guardada');
+      await loadSueldos();
+      if (selectedId) await loadDetalle(selectedId);
+    } catch (e) {
+      setComisionConfigError(
+        e instanceof Error ? e.message : 'No se pudo guardar la configuracion de comisiones'
+      );
+    } finally {
+      setComisionConfigSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -341,6 +420,114 @@ export default function SueldosVendedores() {
       </div>
 
       {error && <Alert kind="error" message={error} />}
+
+      <ChartCard
+        title="Configuracion de comisiones"
+        right={comisionConfigLoading ? <Spinner /> : null}
+      >
+        {comisionConfigError && <Alert kind="error" message={comisionConfigError} />}
+        {comisionConfigSuccess && <Alert kind="info" message={comisionConfigSuccess} />}
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <label className="text-sm text-slate-200">
+            Modo
+            <select
+              className="input-modern mt-2 w-full"
+              value={comisionConfig.mode}
+              onChange={(e) =>
+                setComisionConfig((prev) => ({
+                  ...prev,
+                  mode: e.target.value === 'lista' ? 'lista' : 'producto',
+                }))
+              }
+              disabled={comisionConfigLoading || comisionConfigSaving}
+            >
+              <option value="producto">Por producto</option>
+              <option value="lista">Por lista de precios</option>
+            </select>
+          </label>
+          <label className="text-sm text-slate-200">
+            Lista local (%)
+            <input
+              className="input-modern mt-2 w-full"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={comisionConfig.porcentajes.local}
+              onChange={(e) =>
+                setComisionConfig((prev) => ({
+                  ...prev,
+                  porcentajes: { ...prev.porcentajes, local: Number(e.target.value || 0) },
+                }))
+              }
+              disabled={comisionConfigLoading || comisionConfigSaving}
+            />
+          </label>
+          <label className="text-sm text-slate-200">
+            Lista distribuidor (%)
+            <input
+              className="input-modern mt-2 w-full"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={comisionConfig.porcentajes.distribuidor}
+              onChange={(e) =>
+                setComisionConfig((prev) => ({
+                  ...prev,
+                  porcentajes: { ...prev.porcentajes, distribuidor: Number(e.target.value || 0) },
+                }))
+              }
+              disabled={comisionConfigLoading || comisionConfigSaving}
+            />
+          </label>
+          <label className="text-sm text-slate-200">
+            Lista final (%)
+            <input
+              className="input-modern mt-2 w-full"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={comisionConfig.porcentajes.final}
+              onChange={(e) =>
+                setComisionConfig((prev) => ({
+                  ...prev,
+                  porcentajes: { ...prev.porcentajes, final: Number(e.target.value || 0) },
+                }))
+              }
+              disabled={comisionConfigLoading || comisionConfigSaving}
+            />
+          </label>
+          <label className="text-sm text-slate-200">
+            Productos en oferta (%)
+            <input
+              className="input-modern mt-2 w-full"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={comisionConfig.porcentajes.oferta}
+              onChange={(e) =>
+                setComisionConfig((prev) => ({
+                  ...prev,
+                  porcentajes: { ...prev.porcentajes, oferta: Number(e.target.value || 0) },
+                }))
+              }
+              disabled={comisionConfigLoading || comisionConfigSaving}
+            />
+          </label>
+        </div>
+        <div className="mt-3">
+          <Button
+            type="button"
+            onClick={guardarConfigComisionListas}
+            disabled={comisionConfigLoading || comisionConfigSaving}
+          >
+            {comisionConfigSaving ? 'Guardando...' : 'Guardar configuracion'}
+          </Button>
+        </div>
+      </ChartCard>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-6">
