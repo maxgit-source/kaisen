@@ -1,5 +1,6 @@
 const { check, validationResult } = require('express-validator');
 const oppRepo = require('../db/repositories/crmOpportunityRepository');
+const logger = require('../lib/logger');
 const actRepo = require('../db/repositories/crmActivityRepository');
 const salesRepo = require('../db/repositories/salesRepository');
 
@@ -80,7 +81,7 @@ async function actualizarOportunidad(req, res) {
         // No bloquear actualización de oportunidad por fallo en venta
         // Loguear en consola para diagnóstico
         // eslint-disable-next-line no-console
-        console.error('[CRM] Error creando venta automática por oportunidad ganada', e);
+        logger.error({ err: e }, '[CRM] Error creando venta automática por oportunidad ganada');
       }
     }
 

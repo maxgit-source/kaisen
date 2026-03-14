@@ -7,6 +7,7 @@ import { useLicense } from '../context/LicenseContext';
 import { FEATURE_LABELS, hasFeature, type FeatureKey } from '../lib/features';
 import ModuloNoHabilitado from '../pages/ModuloNoHabilitado';
 import { getRoleFromToken } from '../lib/auth';
+import PageErrorBoundary from '../components/PageErrorBoundary';
 
 const LoginPage = lazy(() => import('../pages/Login'));
 const Dashboard = lazy(() => import('../pages/Dashboard'));
@@ -25,6 +26,7 @@ const CRM = lazy(() => import('../pages/CRM'));
 const Postventa = lazy(() => import('../pages/Postventa'));
 const Aprobaciones = lazy(() => import('../pages/Aprobaciones'));
 const Ventas = lazy(() => import('../pages/Ventas'));
+const CajaRapida = lazy(() => import('../pages/CajaRapida'));
 const Compras = lazy(() => import('../pages/Compras'));
 const Proveedores = lazy(() => import('../pages/Proveedores'));
 const Multideposito = lazy(() => import('../pages/Multideposito'));
@@ -33,6 +35,8 @@ const Arca = lazy(() => import('../pages/Arca'));
 const SueldosVendedores = lazy(() => import('../pages/SueldosVendedores'));
 const RemitoRedirect = lazy(() => import('../pages/RemitoRedirect'));
 const OfertasPrecios = lazy(() => import('../pages/OfertasPrecios'));
+const ConfiguracionAlertas = lazy(() => import('../pages/ConfiguracionAlertas'));
+const Integraciones = lazy(() => import('../pages/Integraciones'));
 
 function RouteFallback() {
   return (
@@ -93,6 +97,7 @@ function AppRoutes() {
         >
           <Route index element={<AppIndexRedirect />} />
           <Route path="dashboard" element={<RoleGate roles={['admin', 'gerente', 'vendedor']}><Page><Suspense fallback={<RouteFallback />}><Dashboard /></Suspense></Page></RoleGate>} />
+          <Route path="caja" element={<RoleGate roles={['admin', 'gerente', 'vendedor']}><Page><Suspense fallback={<RouteFallback />}><CajaRapida /></Suspense></Page></RoleGate>} />
           <Route path="clientes" element={<RoleGate roles={['admin', 'gerente', 'vendedor']}><Page><Suspense fallback={<RouteFallback />}><Clientes /></Suspense></Page></RoleGate>} />
           <Route path="productos" element={<RoleGate roles={['admin', 'gerente', 'vendedor']}><Page><Suspense fallback={<RouteFallback />}><Productos /></Suspense></Page></RoleGate>} />
           <Route path="ventas" element={<RoleGate roles={['admin', 'gerente', 'vendedor', 'fletero']}><Page><Suspense fallback={<RouteFallback />}><Ventas /></Suspense></Page></RoleGate>} />
@@ -107,6 +112,8 @@ function AppRoutes() {
           <Route path="usuarios" element={<RoleGate roles={['admin']}><Page><FeatureGate feature="usuarios"><Suspense fallback={<RouteFallback />}><Usuarios /></Suspense></FeatureGate></Page></RoleGate>} />
           <Route path="sueldos-vendedores" element={<RoleGate roles={['admin']}><Page><FeatureGate feature="usuarios"><Suspense fallback={<RouteFallback />}><SueldosVendedores /></Suspense></FeatureGate></Page></RoleGate>} />
           <Route path="configuracion" element={<RoleGate roles={['admin']}><Page><Suspense fallback={<RouteFallback />}><ConfiguracionAdmin /></Suspense></Page></RoleGate>} />
+          <Route path="alertas" element={<RoleGate roles={['admin']}><Page><Suspense fallback={<RouteFallback />}><ConfiguracionAlertas /></Suspense></Page></RoleGate>} />
+          <Route path="integraciones" element={<RoleGate roles={['admin', 'gerente']}><Page><FeatureGate feature="integraciones"><Suspense fallback={<RouteFallback />}><Integraciones /></Suspense></FeatureGate></Page></RoleGate>} />
           <Route path="predicciones" element={<RoleGate roles={['admin', 'gerente']}><Page><FeatureGate feature="ai"><Suspense fallback={<RouteFallback />}><Predicciones /></Suspense></FeatureGate></Page></RoleGate>} />
           <Route path="crm" element={<RoleGate roles={['admin', 'gerente', 'vendedor']}><Page><FeatureGate feature="crm"><Suspense fallback={<RouteFallback />}><CRM /></Suspense></FeatureGate></Page></RoleGate>} />
           <Route path="postventa" element={<RoleGate roles={['admin', 'gerente', 'vendedor']}><Page><FeatureGate feature="postventa"><Suspense fallback={<RouteFallback />}><Postventa /></Suspense></FeatureGate></Page></RoleGate>} />
@@ -124,10 +131,20 @@ function AppRoutes() {
 }
 
 function Page({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const pageName =
+    location.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(-1)[0]
+      ?.replace(/-/g, ' ') || 'modulo';
+
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.22, ease: 'easeOut' }}>
-      {children}
-    </motion.div>
+    <PageErrorBoundary pageName={pageName}>
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.22, ease: 'easeOut' }}>
+        {children}
+      </motion.div>
+    </PageErrorBoundary>
   );
 }
 

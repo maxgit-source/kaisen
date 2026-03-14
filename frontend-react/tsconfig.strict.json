@@ -6,6 +6,7 @@
     "noUnusedParameters": true
   },
   "include": [
+    "src/vite-env.d.ts",
     "src/lib/**/*",
     "src/ui/**/*",
     "src/context/**/*"

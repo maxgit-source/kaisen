@@ -1,5 +1,6 @@
 const { check, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
+const logger = require('../lib/logger');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const clientRepo = require('../db/repositories/clientRepository');
@@ -91,7 +92,7 @@ async function register(req, res) {
     const tokens = await issueTokens({ clienteId: cliente.id, email: normalizedEmail, req });
     res.status(201).json(tokens);
   } catch (e) {
-    console.error('Error en registro de cliente:', e.message);
+    logger.error({ err: e.message }, 'Error en registro de cliente:');
     res.status(500).json({ error: 'No se pudo registrar el cliente' });
   }
 }
@@ -129,7 +130,7 @@ async function login(req, res) {
     });
     res.json(tokens);
   } catch (e) {
-    console.error('Login cliente error:', e.message);
+    logger.error({ err: e.message }, 'Login cliente error:');
     res.status(500).json({ error: 'Error de autenticacion' });
   }
 }
@@ -155,7 +156,7 @@ async function refreshToken(req, res) {
     );
     res.json({ accessToken });
   } catch (err) {
-    console.error('Refresh token cliente error:', err.message);
+    logger.error({ err: err.message }, 'Refresh token cliente error:');
     return res.status(403).json({ error: 'Refresh token invalido o expirado' });
   }
 }
@@ -241,7 +242,7 @@ async function setAccessPassword(req, res) {
       reset: Boolean(existingAuth),
     });
   } catch (e) {
-    console.error('Error al configurar password cliente:', e.message);
+    logger.error({ err: e.message }, 'Error al configurar password cliente:');
     res.status(500).json({ error: 'No se pudo configurar la contrasena del cliente' });
   }
 }

@@ -6,6 +6,7 @@ import {
   clearTokens,
   getApiBase,
 } from './storage';
+import { toFriendlyErrorMessage } from './errors';
 
 function apiUrl(path: string) {
   const base = getApiBase();
@@ -22,12 +23,60 @@ export async function login(email: string, password: string): Promise<LoginRespo
 
   if (!res.ok) {
     let msg = 'Error desconocido';
+    let code = '';
+    let mfaRequired = false;
     try {
       const data: LoginError = await res.json();
       if (data.error) msg = data.error;
       else if (Array.isArray(data.errors) && data.errors.length) msg = data.errors[0].msg;
+      code = String(data.code || '').trim();
+      mfaRequired = Boolean(data.mfa_required);
     } catch (_) { }
-    throw new Error(msg);
+    const err: Error & { code?: string; mfaRequired?: boolean; status?: number } = new Error(
+      toFriendlyErrorMessage(msg, res.status, code || undefined)
+    );
+    err.code = code || undefined;
+    err.mfaRequired = mfaRequired;
+    err.status = res.status;
+    throw err;
+  }
+
+  return res.json();
+}
+
+export async function loginWithMfa(
+  email: string,
+  password: string,
+  opts: { totp_code?: string; backup_code?: string } = {}
+): Promise<LoginResponse> {
+  const res = await fetch(apiUrl('/api/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      password,
+      ...opts,
+    }),
+  });
+
+  if (!res.ok) {
+    let msg = 'Error desconocido';
+    let code = '';
+    let mfaRequired = false;
+    try {
+      const data: LoginError = await res.json();
+      if (data.error) msg = data.error;
+      else if (Array.isArray(data.errors) && data.errors.length) msg = data.errors[0].msg;
+      code = String(data.code || '').trim();
+      mfaRequired = Boolean(data.mfa_required);
+    } catch (_) {}
+    const err: Error & { code?: string; mfaRequired?: boolean; status?: number } = new Error(
+      toFriendlyErrorMessage(msg, res.status, code || undefined)
+    );
+    err.code = code || undefined;
+    err.mfaRequired = mfaRequired;
+    err.status = res.status;
+    throw err;
   }
 
   return res.json();
@@ -183,10 +232,11 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
         if (data?.regla) err.regla = data.regla;
         throw err;
       }
+      const errorCode = typeof data?.code === 'string' ? data.code : undefined;
       if (Array.isArray(data?.errors) && data.errors.length) {
         errMsg = data.errors
           .map((e: any) => {
-            const param = e?.param ? String(e.param) : 'campo';
+            const param = e?.param ? String(e.param) : e?.path ? String(e.path) : 'campo';
             const msg = e?.msg ? String(e.msg) : 'invalido';
             return `${param}: ${msg}`;
           })
@@ -200,7 +250,15 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     try {
       console.error('[apiFetch] Error', { url, status: res.status, body: errorText });
     } catch { }
-    throw new Error(errMsg);
+    const parsedBody = errorText ? JSON.parse(errorText || '{}') : null;
+    const errorCode =
+      parsedBody && typeof parsedBody.code === 'string' ? parsedBody.code : undefined;
+    const friendlyMessage = toFriendlyErrorMessage(errMsg, res.status, errorCode);
+    const err: Error & { status?: number; technicalMessage?: string; code?: string } = new Error(friendlyMessage);
+    err.status = res.status;
+    err.technicalMessage = errMsg;
+    err.code = errorCode;
+    throw err;
   }
   const text = await res.text();
   if (!text) return undefined as any;
@@ -251,6 +309,28 @@ export const Api = {
       method: 'PUT',
       body: JSON.stringify({ valor }),
     }),
+  businessProfile: () => apiFetch('/api/config/business-profile'),
+  guardarBusinessProfile: (body: {
+    nombre?: string;
+    direccion?: string;
+    logo_url?: string;
+    client_mode?: 'manual' | 'anonymous' | 'later';
+  }) =>
+    apiFetch('/api/config/business-profile', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  whatsappStatus: () => apiFetch('/api/whatsapp/status'),
+  whatsappConnect: (body: { force?: boolean } = {}) =>
+    apiFetch('/api/whatsapp/connect', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  whatsappQr: () => apiFetch<{ qr: string }>('/api/whatsapp/qr'),
+  whatsappDisconnect: () =>
+    apiFetch('/api/whatsapp/disconnect', {
+      method: 'POST',
+    }),
   licenseStatus: async () => ({
     status: 'cloud',
     licensed: true,
@@ -266,6 +346,7 @@ export const Api = {
       'crm',
       'postventa',
       'multideposito',
+      'integraciones',
     ],
   }),
   licenseInstallId: () => licenseInstallId(),
@@ -360,6 +441,7 @@ export const Api = {
   guardarCatalogoConfig: (body: {
     nombre?: string;
     logo_url?: string;
+    pdf_logo_url?: string;
     destacado_producto_id?: number | null;
     publicado?: boolean;
     price_type?: 'final' | 'distribuidor' | 'mayorista';
@@ -397,9 +479,56 @@ export const Api = {
     }
     return await res.blob();
   },
+  descargarCatalogoPdf: async (
+    mode: 'precios' | 'ofertas',
+    priceType: 'distribuidor' | 'mayorista' | 'final' = 'final',
+    opts: { cacheBust?: number } = {}
+  ): Promise<Blob> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers['Authorization'] = `Bearer ${at}`;
+    const p = new URLSearchParams();
+    p.set('mode', mode);
+    if (mode === 'precios' && priceType) p.set('price_type', priceType);
+    if (opts.cacheBust != null) p.set('_ts', String(opts.cacheBust));
+    const qs = p.toString();
+    const res = await fetch(apiUrl(`/api/catalogo/pdf${qs ? `?${qs}` : ''}`), {
+      method: 'GET',
+      headers,
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      let msg = 'No se pudo descargar el PDF del catalogo';
+      try {
+        const data = await res.json();
+        if (data?.error) msg = data.error;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    return await res.blob();
+  },
+  enviarCatalogoWhatsappCampania: (body: {
+    mode?: 'precios' | 'ofertas';
+    price_type?: 'distribuidor' | 'mayorista' | 'final';
+    campaign_name?: string;
+    message_text?: string;
+    cliente_ids: number[];
+  }) =>
+    apiFetch('/api/catalogo/whatsapp/campanias/enviar', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  catalogoWhatsappCampanias: (opts: { limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/catalogo/whatsapp/campanias${qs ? `?${qs}` : ''}`);
+  },
+  catalogoWhatsappCampania: (id: number) => apiFetch(`/api/catalogo/whatsapp/campanias/${id}`),
   importarProductosExcel: async (
     file: File,
-    opts: { dryRun?: boolean } = {}
+    opts: { dryRun?: boolean; async?: boolean } = {}
   ): Promise<any> => {
     const at = getAccessToken();
     const headers: Record<string, string> = {};
@@ -408,6 +537,7 @@ export const Api = {
     form.append('file', file);
     const p = new URLSearchParams();
     if (opts.dryRun) p.set('dry_run', '1');
+    if (opts.async) p.set('async', '1');
     const qs = p.toString();
     const res = await fetch(apiUrl(`/api/productos/import${qs ? `?${qs}` : ''}`), {
       method: 'POST',
@@ -460,6 +590,14 @@ export const Api = {
   crearProducto: (body: any) => apiFetch('/api/productos', { method: 'POST', body: JSON.stringify(body) }),
   actualizarProducto: (id: number, body: any) => apiFetch(`/api/productos/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   eliminarProducto: (id: number) => apiFetch(`/api/productos/${id}`, { method: 'DELETE' }),
+  productosPapelera: (opts: { limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/productos/papelera${qs ? `?${qs}` : ''}`);
+  },
+  restaurarProducto: (id: number) => apiFetch(`/api/productos/${id}/restaurar`, { method: 'PUT' }),
   productoPorCodigo: (codigo: string) => apiFetch(`/api/productos/codigo/${encodeURIComponent(codigo)}`),
   productoHistorial: (id: number, params: { limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
@@ -506,6 +644,7 @@ export const Api = {
           offset?: number;
           all?: boolean;
           view?: 'mobile' | 'full';
+          deleted?: boolean;
         }
   ) => {
     const p = new URLSearchParams();
@@ -518,6 +657,7 @@ export const Api = {
       if (arg.offset != null) p.set('offset', String(arg.offset));
       if (arg.all) p.set('all', '1');
       if (arg.view) p.set('view', arg.view);
+      if (arg.deleted) p.set('deleted', '1');
     }
     const qs = p.toString();
     return apiFetch(`/api/clientes${qs ? `?${qs}` : ''}`);
@@ -525,6 +665,43 @@ export const Api = {
   crearCliente: (body: any) => apiFetch('/api/clientes', { method: 'POST', body: JSON.stringify(body) }),
   actualizarCliente: (id: number, body: any) => apiFetch(`/api/clientes/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   eliminarCliente: (id: number) => apiFetch(`/api/clientes/${id}`, { method: 'DELETE' }),
+  clientesPapelera: (opts: { q?: string; limit?: number; offset?: number; view?: 'mobile' | 'full' } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set('q', opts.q);
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    if (opts.view) p.set('view', opts.view);
+    const qs = p.toString();
+    return apiFetch(`/api/clientes/papelera${qs ? `?${qs}` : ''}`);
+  },
+  restaurarCliente: (id: number) => apiFetch(`/api/clientes/${id}/restaurar`, { method: 'PUT' }),
+  importarClientesExcel: async (
+    file: File,
+    opts: { dryRun?: boolean; async?: boolean } = {}
+  ): Promise<any> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers.Authorization = `Bearer ${at}`;
+    const form = new FormData();
+    form.append('file', file);
+    const params = new URLSearchParams();
+    if (opts.dryRun) params.set('dry_run', '1');
+    if (opts.async) params.set('async', '1');
+    const res = await fetch(apiUrl(`/api/clientes/importar-excel${params.size ? `?${params}` : ''}`), {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+    if (!res.ok) {
+      let msg = 'No se pudo importar el archivo de clientes';
+      try {
+        const data = await res.json();
+        if (data?.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
   clienteAcceso: (clienteId: number) => apiFetch(`/api/clientes/${clienteId}/credenciales`),
   clienteSetPassword: (clienteId: number, body: { password?: string }) =>
     apiFetch(`/api/clientes/${clienteId}/credenciales`, {
@@ -553,7 +730,41 @@ export const Api = {
   actualizarProveedor: (id: number, body: any) => apiFetch(`/api/proveedores/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
 
   // Compras, Ventas, Pagos
-  compras: () => apiFetch('/api/compras'),
+  compras: (f: { limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(f)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)]),
+    );
+    return apiFetch(`/api/compras${qs.size ? `?${qs}` : ''}`);
+  },
+  importarComprasExcel: async (
+    file: File,
+    opts: { dryRun?: boolean; async?: boolean } = {}
+  ): Promise<any> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers.Authorization = `Bearer ${at}`;
+    const form = new FormData();
+    form.append('file', file);
+    const params = new URLSearchParams();
+    if (opts.dryRun) params.set('dry_run', '1');
+    if (opts.async) params.set('async', '1');
+    const res = await fetch(apiUrl(`/api/compras/importar-excel${params.size ? `?${params}` : ''}`), {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+    if (!res.ok) {
+      let msg = 'No se pudo importar el archivo de compras';
+      try {
+        const data = await res.json();
+        if (data?.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
   compraDetalle: (id: number) => apiFetch(`/api/compras/${id}/detalle`),
   crearCompra: (body: any) => apiFetch('/api/compras', { method: 'POST', body: JSON.stringify(body) }),
   recibirCompra: (id: number, body: any = {}) => apiFetch(`/api/compras/${id}/recibir`, { method: 'POST', body: JSON.stringify(body) }),
@@ -613,6 +824,42 @@ export const Api = {
   ) =>
     apiFetch(`/api/metodos-pago/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   eliminarMetodoPago: (id: number) => apiFetch(`/api/metodos-pago/${id}`, { method: 'DELETE' }),
+  usuarios: (opts: { q?: string; role?: string; activo?: boolean; include_deleted?: boolean } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set('q', opts.q);
+    if (opts.role) p.set('role', opts.role);
+    if (typeof opts.activo === 'boolean') p.set('activo', opts.activo ? 'true' : 'false');
+    if (opts.include_deleted) p.set('include_deleted', '1');
+    const qs = p.toString();
+    return apiFetch(`/api/usuarios${qs ? `?${qs}` : ''}`);
+  },
+  roles: () => apiFetch('/api/roles'),
+  usuariosRendimiento: (opts: { desde?: string; hasta?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.desde) p.set('desde', opts.desde);
+    if (opts.hasta) p.set('hasta', opts.hasta);
+    const qs = p.toString();
+    return apiFetch(`/api/usuarios/rendimiento${qs ? `?${qs}` : ''}`);
+  },
+  usuariosPapelera: () => apiFetch('/api/usuarios/papelera'),
+  crearUsuario: (body: any) => apiFetch('/api/usuarios', { method: 'POST', body: JSON.stringify(body) }),
+  actualizarUsuario: (id: number, body: any) =>
+    apiFetch(`/api/usuarios/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  eliminarUsuario: (id: number) => apiFetch(`/api/usuarios/${id}`, { method: 'DELETE' }),
+  restaurarUsuario: (id: number) => apiFetch(`/api/usuarios/${id}/restaurar`, { method: 'PUT' }),
+  auditLog: (opts: { limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    if (opts.offset != null) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return apiFetch(`/api/admin/audit-log${qs ? `?${qs}` : ''}`);
+  },
+  mfaStatus: () => apiFetch('/api/mfa/status'),
+  mfaSetup: () => apiFetch('/api/mfa/setup', { method: 'POST' }),
+  mfaConfirm: (body: { code: string }) =>
+    apiFetch('/api/mfa/confirm', { method: 'POST', body: JSON.stringify(body) }),
+  mfaDisable: (body: { totp_code?: string; backup_code?: string }) =>
+    apiFetch('/api/mfa/disable', { method: 'POST', body: JSON.stringify(body) }),
 
   // Deudas iniciales de clientes
   clienteDeudasIniciales: (clienteId: number) =>
@@ -1293,6 +1540,7 @@ export const Api = {
     apiFetch('/api/setup/reset-database', {
       method: 'POST',
     }),
+  importJob: (jobId: string) => apiFetch(`/api/import-jobs/${jobId}`),
 
   // ARCA
   arcaConfig: () => apiFetch('/api/arca/config'),
@@ -1305,6 +1553,28 @@ export const Api = {
     apiFetch('/api/arca/test', {
       method: 'POST',
     }),
+  arcaUploadP12: async (file: File, passphrase = ''): Promise<any> => {
+    const at = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (at) headers.Authorization = `Bearer ${at}`;
+    const form = new FormData();
+    form.append('file', file);
+    if (passphrase) form.append('passphrase', passphrase);
+    const res = await fetch(apiUrl('/api/arca/config/p12'), {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+    if (!res.ok) {
+      let msg = 'No se pudo subir el certificado .p12';
+      try {
+        const data = await res.json();
+        if (data?.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
   arcaPuntosVenta: () => apiFetch('/api/arca/puntos-venta'),
   arcaCrearPuntoVenta: (body: { punto_venta: number; nombre?: string; activo?: boolean }) =>
     apiFetch('/api/arca/puntos-venta', { method: 'POST', body: JSON.stringify(body) }),
@@ -1328,6 +1598,36 @@ export const Api = {
   }) =>
     apiFetch('/api/arca/emitir', { method: 'POST', body: JSON.stringify(body) }),
   arcaFactura: (ventaId: number) => apiFetch(`/api/arca/facturas/${ventaId}`),
+  libroIvaDigital: async (opts: {
+    mes: string;
+    tipo?: 'ventas';
+    format?: 'json' | 'csv' | 'xlsx';
+  }): Promise<any> => {
+    const p = new URLSearchParams();
+    p.set('mes', opts.mes);
+    p.set('tipo', opts.tipo || 'ventas');
+    if (opts.format) p.set('format', opts.format);
+    const qs = p.toString();
+    if (opts.format === 'csv' || opts.format === 'xlsx') {
+      const at = getAccessToken();
+      const headers: Record<string, string> = {};
+      if (at) headers.Authorization = `Bearer ${at}`;
+      const res = await fetch(apiUrl(`/api/reportes/libro-iva?${qs}`), {
+        method: 'GET',
+        headers,
+      });
+      if (!res.ok) {
+        let msg = 'No se pudo descargar el libro IVA';
+        try {
+          const data = await res.json();
+          if (data?.error) msg = data.error;
+        } catch {}
+        throw new Error(msg);
+      }
+      return res.blob();
+    }
+    return apiFetch(`/api/reportes/libro-iva?${qs}`);
+  },
   arcaFacturaPdf: async (ventaId: number): Promise<Blob> => {
     const at = getAccessToken();
     const headers: Record<string, string> = {};
@@ -1341,4 +1641,103 @@ export const Api = {
     }
     return await res.blob();
   },
+
+  // ─── Alertas WhatsApp ──────────────────────────────────────────────────────
+  getAlertConfig: () => apiFetch('/api/alerts/config'),
+  saveAlertConfig: (body: Record<string, unknown>) =>
+    apiFetch('/api/alerts/config', { method: 'PUT', body: JSON.stringify(body) }),
+  testAlert: () => apiFetch('/api/alerts/test', { method: 'POST' }),
+
+  // ─── Chat IA (Asistente conversacional Gemini) ──────────────────────────────
+  chatMessage: (body: {
+    message: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) =>
+    apiFetch<{ reply: string; history: Array<{ role: string; content: string }> }>(
+      '/api/chat/message',
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+
+  // ── Integraciones — MercadoPago ──────────────────────────────────────────────
+  mpStatus: () =>
+    apiFetch<import('../types/entities').IntegracionMpStatus>('/api/integraciones/mp/status'),
+
+  mpSaveToken: (access_token: string, webhook_secret?: string) =>
+    apiFetch<{ message: string; verified: boolean; status: import('../types/entities').IntegracionMpStatus }>(
+      '/api/integraciones/mp/token',
+      { method: 'PUT', body: JSON.stringify({ access_token, webhook_secret }) }
+    ),
+
+  mpDisconnect: () =>
+    apiFetch<{ message: string; status: import('../types/entities').IntegracionMpStatus }>(
+      '/api/integraciones/mp/disconnect',
+      { method: 'DELETE' }
+    ),
+
+  mpCreatePaymentLink: (venta_id: number) =>
+    apiFetch<import('../types/entities').MpPaymentLink>(
+      '/api/integraciones/mp/payment-link',
+      { method: 'POST', body: JSON.stringify({ venta_id }) }
+    ),
+
+  mpGetPaymentLink: (ventaId: number) =>
+    apiFetch<import('../types/entities').MpPaymentLink | null>(
+      `/api/integraciones/mp/payment-link/${ventaId}`
+    ),
+
+  // ── Integraciones — MercadoLibre ─────────────────────────────────────────────
+  mlStatus: () =>
+    apiFetch<import('../types/entities').IntegracionMlStatus>('/api/integraciones/ml/status'),
+
+  mlGetAuthUrl: () =>
+    apiFetch<{ url: string; state: string }>('/api/integraciones/ml/auth-url'),
+
+  mlDisconnect: () =>
+    apiFetch<{ message: string; status: import('../types/entities').IntegracionMlStatus }>(
+      '/api/integraciones/ml/disconnect',
+      { method: 'DELETE' }
+    ),
+
+  mlSyncProduct: (body: {
+    producto_id: number;
+    category_id?: string;
+    title?: string;
+    price?: number;
+    available_quantity?: number;
+    currency_id?: string;
+    listing_type_id?: string;
+    condition?: string;
+    buying_mode?: string;
+    pictures?: string[];
+    attributes?: Array<{ id: string; value_name: string }>;
+  }) =>
+    apiFetch('/api/integraciones/ml/sync-product', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  mlListSyncedProducts: (params?: { limit?: number; offset?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.limit != null) p.set('limit', String(params.limit));
+    if (params?.offset != null) p.set('offset', String(params.offset));
+    const qs = p.toString();
+    return apiFetch<import('../types/entities').MlSyncedProduct[]>(
+      `/api/integraciones/ml/synced-products${qs ? `?${qs}` : ''}`
+    );
+  },
+
+  mlPauseProduct: (id: number) =>
+    apiFetch(`/api/integraciones/ml/products/${id}/pause`, { method: 'PUT' }),
+
+  mlReactivateProduct: (id: number) =>
+    apiFetch(`/api/integraciones/ml/products/${id}/reactivate`, { method: 'PUT' }),
+
+  mlCloseProduct: (id: number) =>
+    apiFetch(`/api/integraciones/ml/products/${id}/close`, { method: 'PUT' }),
+
+  mlImportOrders: (params?: { from?: string; to?: string; limit?: number }) =>
+    apiFetch<import('../types/entities').MlImportResult>(
+      '/api/integraciones/ml/import-orders',
+      { method: 'POST', body: JSON.stringify(params ?? {}) }
+    ),
 };

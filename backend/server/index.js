@@ -3,6 +3,22 @@
 // ==============================
 require('dotenv').config();
 
+// ── Sentry (error tracking — debe inicializarse ANTES de todo lo demás) ──────
+const Sentry = require('@sentry/node');
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    release: process.env.APP_VERSION,
+    tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 0,
+    integrations: [
+      Sentry.httpIntegration(),
+      Sentry.expressIntegration(),
+    ],
+  });
+}
+
+const logger = require('./lib/logger');
 const express = require('express');
 const app = express();
 
@@ -23,12 +39,12 @@ const path = require('path');
 const hpp = require('hpp');
 
 const {
-  apiLimiter,
   apiGlobalLimiter,
   loggingMiddleware,
   pathTraversalProtection,
   sendSMSNotification,
 } = require('./middlewares/security.js');
+const auditMiddleware = require('./middlewares/auditMiddleware');
 
 // ==============================
 //   IMPORT DE RUTAS
@@ -48,6 +64,7 @@ const clientRoutes = require('./routes/clientroutes.js');
 const clientPortalRoutes = require('./routes/clientportalroutes.js');
 const supplierRoutes = require('./routes/supplierroutes.js');
 const purchaseRoutes = require('./routes/purchaseroutes.js');
+const importJobRoutes = require('./routes/importjobroutes.js');
 const salesRoutes = require('./routes/salesroutes.js');
 const paymentRoutes = require('./routes/paymentroutes.js');
 const paymentMethodRoutes = require('./routes/paymentmethodroutes.js');
@@ -58,6 +75,7 @@ const financeRoutes = require('./routes/financeroutes.js');
 const vendorPayrollRoutes = require('./routes/vendorpayrollroutes.js');
 const configRoutes = require('./routes/configroutes.js');
 const catalogRoutes = require('./routes/catalogroutes.js');
+const whatsappRoutes = require('./routes/whatsapproutes.js');
 const llmRoutes = require('./routes/llmroutes.js');
 const adminRoutes = require('./routes/adminroutes.js');
 const depositoRoutes = require('./routes/depositoroutes.js');
@@ -66,6 +84,15 @@ const marketplaceRoutes = require('./routes/marketplaceroutes.js');
 const arcaRoutes = require('./routes/arcaroutes.js');
 const ownerRoutes = require('./routes/ownerroutes.js');
 const pricingRoutes = require('./routes/pricingroutes.js');
+const { startWhatsappDispatcher } = require('./services/whatsappCampaignDispatcher');
+const { startAlertScheduler }     = require('./services/alertScheduler');
+const { cleanupCatalogPdfOlderThan } = require('./services/catalogPdfStorageService');
+const { bootActiveProvider } = require('./services/messaging/providerRegistry');
+const { startSalesDailyAggregateScheduler } = require('./services/salesDailyAggregateService');
+const { swaggerSpec, swaggerUi } = require('./docs/swagger');
+const alertRoutes          = require('./routes/alertroutes.js');
+const chatRoutes           = require('./routes/chatroutes.js');
+const integracionesRoutes  = require('./routes/integracionesroutes.js');
 
 // ==============================
 //   CONFIG SERVER
@@ -194,10 +221,12 @@ app.use(hpp());
 //   LOG + PROTECCIÓN PATH TRAVERSAL
 // ==============================
 app.use(pathTraversalProtection);
+app.use('/api', auditMiddleware);
 
 // ==============================
 //   GLOBAL RATE LIMIT ANTES DE RUTAS
 // ==============================
+app.use('/api', healthRoutes);
 app.use('/api', apiGlobalLimiter);
 
 // ==============================
@@ -211,11 +240,12 @@ app.use(
     immutable: true,
   })
 );
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/api/docs.json', (req, res) => res.json(swaggerSpec));
 
 // ==============================
 //   TODAS LAS RUTAS
 // ==============================
-app.use('/api', healthRoutes);
 app.use('/api', publicRoutes);
 app.use('/api', authRoutes);
 app.use('/api', setupRoutes);
@@ -231,6 +261,7 @@ app.use('/api', clientRoutes);
 app.use('/api', clientPortalRoutes);
 app.use('/api', supplierRoutes);
 app.use('/api', purchaseRoutes);
+app.use('/api', importJobRoutes);
 app.use('/api', salesRoutes);
 app.use('/api', paymentRoutes);
 app.use('/api', paymentMethodRoutes);
@@ -241,6 +272,7 @@ app.use('/api', financeRoutes);
 app.use('/api', vendorPayrollRoutes);
 app.use('/api', configRoutes);
 app.use('/api', catalogRoutes);
+app.use('/api', whatsappRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', depositoRoutes);
 app.use('/api', zonasRoutes);
@@ -248,6 +280,9 @@ app.use('/api', marketplaceRoutes);
 app.use('/api', arcaRoutes);
 app.use('/api', ownerRoutes);
 app.use('/api', pricingRoutes);
+app.use('/api', alertRoutes);
+app.use('/api', chatRoutes);
+app.use('/api', integracionesRoutes);
 
 // ==============================
 //   RUTA DEFAULT
@@ -260,11 +295,16 @@ app.get('/', (req, res) => {
 //   ERROR HANDLER
 // ==============================
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  // Reportar a Sentry si está configurado
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(err, { extra: { path: req.originalUrl, method: req.method } });
+  }
 
   if (err.message === 'No permitido por CORS') {
     return res.status(403).json({ error: 'Origen no permitido', request_id: req.id });
   }
+
+  logger.error({ err, path: req.originalUrl, method: req.method, requestId: req.id }, 'Unhandled server error');
 
   sendSMSNotification(
     `Error grave en servidor: ${err.message}. Ruta: ${req.originalUrl}`
@@ -279,9 +319,37 @@ app.use((err, req, res, next) => {
 //   START SERVER
 // ==============================
 function startServer({ port = PORT, host = HOST } = {}) {
-  const server = app.listen(port, host, () => {
-    console.log(`Servidor escuchando en http://${host}:${port}`);
+  // Verificar licencia al arrancar
+  const { getLicenseInfo } = require('./services/licenseService');
+  const licenseInfo = getLicenseInfo();
+  if (!licenseInfo.valid) {
+    console.error('');
+    console.error('⛔  LICENCIA INVÁLIDA');
+    console.error(`    Motivo: ${licenseInfo.reason}`);
+    console.error('    Configurá LICENSE_KEY en tu archivo .env');
+    console.error('    Contactá soporte para obtener una clave válida');
+    console.error('');
+    if (process.env.NODE_ENV === 'production') process.exit(1);
+  } else if (licenseInfo.dev) {
+    console.log('[licencia] Modo desarrollo — validación omitida');
+  } else {
+    console.log(`[licencia] ✅ ${licenseInfo.companyName} — válida hasta ${new Date(licenseInfo.expiresAt).toLocaleDateString('es-AR')}`);
+    if (licenseInfo.expiringSoon) {
+      console.warn(`[licencia] ⚠️  La licencia vence en ${licenseInfo.daysLeft} días. Renovar pronto.`);
+    }
+  }
+
+  cleanupCatalogPdfOlderThan({ hours: 72 });
+  bootActiveProvider().catch((err) => {
+    console.error('[whatsapp] provider boot error', err?.message || err);
   });
+  const server = app.listen(port, host, () => {
+    logger.info({ port, host, env: process.env.NODE_ENV }, 'Servidor iniciado');
+  });
+
+  startWhatsappDispatcher();
+  startAlertScheduler();
+  startSalesDailyAggregateScheduler();
 
   // Keep alive para Render
   server.keepAliveTimeout = 65000;

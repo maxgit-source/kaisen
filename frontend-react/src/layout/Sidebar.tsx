@@ -3,25 +3,29 @@ import { motion } from 'framer-motion';
 import { useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLicense } from '../context/LicenseContext';
+import { useViewMode } from '../context/ViewModeContext';
+import { useCompany } from '../context/CompanyContext';
 import { getRoleFromToken } from '../lib/auth';
-import { BRAND } from '../config/branding';
+import OwnerAlertsPanel from '../components/OwnerAlertsPanel';
 import { getNavGroups } from './navigationConfig';
 
 export default function Sidebar({ collapsed, mobile = false }: { collapsed?: boolean; mobile?: boolean }) {
   const { accessToken } = useAuth();
   const { status } = useLicense();
+  const { viewMode, toggleViewMode } = useViewMode();
+  const { company } = useCompany();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
-  const groups = useMemo(() => getNavGroups(role, status), [role, status]);
+  const groups = useMemo(() => getNavGroups(role, status, viewMode), [role, status, viewMode]);
   const initials = useMemo(
     () =>
-      BRAND.name
+      company.name
         .split(' ')
         .filter(Boolean)
         .map((word) => word[0])
         .join('')
         .slice(0, 2)
         .toUpperCase(),
-    []
+    [company.name]
   );
 
   return (
@@ -33,20 +37,20 @@ export default function Sidebar({ collapsed, mobile = false }: { collapsed?: boo
     >
       <div className="h-[72px] flex items-center gap-3 px-5 border-b border-white/10 relative">
         <div className="absolute inset-0 opacity-60 bg-gradient-to-br from-indigo-500/10 via-transparent to-cyan-500/10" />
-        {BRAND.logoUrl ? (
+        {company.logoUrl ? (
           <img
-            src={BRAND.logoUrl}
-            alt={BRAND.name}
+            src={company.logoUrl}
+            alt={company.name}
             className="relative h-10 w-10 rounded-2xl object-cover shadow-[0_12px_30px_rgba(15,23,42,0.35)]"
           />
         ) : (
           <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-cyan-500 text-white flex items-center justify-center font-semibold shadow-[0_12px_30px_rgba(45,212,191,0.25)]">
-            <span className="font-logo text-lg">{initials || 'GW'}</span>
+            <span className="font-logo text-lg">{initials || 'ERP'}</span>
           </div>
         )}
         {(!collapsed || mobile) && (
           <div className="relative">
-            <div className="text-sm font-semibold">{BRAND.name}</div>
+            <div className="text-sm font-semibold">{company.name}</div>
             <div className="text-[11px] text-slate-400 font-data">Operacion</div>
           </div>
         )}
@@ -91,8 +95,23 @@ export default function Sidebar({ collapsed, mobile = false }: { collapsed?: boo
         ))}
       </nav>
 
+      {(role === 'admin' || role === 'gerente') && (!collapsed || mobile) && (
+        <OwnerAlertsPanel />
+      )}
+
       <div className="p-3 border-t border-white/10 text-slate-400 text-xs">
-        {(!collapsed || mobile) && <div>Acceso operativo seguro</div>}
+        {(!collapsed || mobile) && (
+          <div className="space-y-2">
+            <div>{viewMode === 'simple' ? 'Vista simple activa' : 'Acceso operativo seguro'}</div>
+            <button
+              type="button"
+              onClick={toggleViewMode}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-xs text-slate-200 transition hover:bg-white/10"
+            >
+              Cambiar a {viewMode === 'simple' ? 'vista completa' : 'vista simple'}
+            </button>
+          </div>
+        )}
       </div>
     </motion.aside>
   );

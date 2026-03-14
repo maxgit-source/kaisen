@@ -1,8 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import Alert from '../components/Alert';
 import TextInput from '../components/TextInput';
 import Button from '../ui/Button';
-import { apiFetch } from '../lib/api';
+import { Api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -19,6 +19,7 @@ type Usuario = {
   rol?: string | null;
   activo?: boolean;
   caja_tipo_default?: 'home_office' | 'sucursal';
+  deleted_at?: string | null;
 };
 
 type PerformanceRow = {
@@ -26,6 +27,28 @@ type PerformanceRow = {
   ventas_count: number;
   total_ventas: number;
   margen: number;
+};
+
+type AuditRow = {
+  id: number;
+  usuario_email?: string | null;
+  accion: string;
+  entidad?: string | null;
+  entidad_id?: number | null;
+  ip_address?: string | null;
+  created_at: string;
+};
+
+type MfaStatus = {
+  enabled: boolean;
+  backup_codes_remaining: number;
+};
+
+type MfaSetup = {
+  qrCodeDataUrl: string;
+  otpauthUrl: string;
+  secret: string;
+  expires_in_seconds: number;
 };
 
 function toNumber(value: unknown) {
@@ -38,6 +61,20 @@ function normalizeActive(value: unknown) {
   return Boolean(value);
 }
 
+function formatMoney(value: number) {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatAuditAction(row: AuditRow) {
+  const entity = row.entidad ? ` / ${row.entidad}` : '';
+  const entityId = row.entidad_id ? ` #${row.entidad_id}` : '';
+  return `${row.accion}${entity}${entityId}`;
+}
+
 export default function Usuarios() {
   const { accessToken } = useAuth();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
@@ -46,7 +83,9 @@ export default function Usuarios() {
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
+  const [deletedUsuarios, setDeletedUsuarios] = useState<Usuario[]>([]);
   const [performance, setPerformance] = useState<PerformanceRow[]>([]);
+  const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -62,8 +101,17 @@ export default function Usuarios() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
+  const [mfaSetup, setMfaSetup] = useState<MfaSetup | null>(null);
+  const [mfaConfirmCode, setMfaConfirmCode] = useState('');
+  const [mfaDisableCode, setMfaDisableCode] = useState('');
+  const [mfaDisableBackupCode, setMfaDisableBackupCode] = useState('');
+  const [useBackupForDisable, setUseBackupForDisable] = useState(false);
+  const [mfaBackupCodes, setMfaBackupCodes] = useState<string[]>([]);
+  const [mfaLoading, setMfaLoading] = useState(false);
+
   const selectedRoleId = useMemo(() => {
-    const roleRow = roles.find((r) => r.nombre === selectedRole);
+    const roleRow = roles.find((row) => row.nombre === selectedRole);
     return roleRow?.id || null;
   }, [roles, selectedRole]);
 
@@ -81,106 +129,91 @@ export default function Usuarios() {
   }, [performance]);
 
   const avgMargin = useMemo(() => {
-    const values = performance.map((p) => toNumber(p.margen)).filter((v) => v > 0);
+    const values = performance.map((row) => toNumber(row.margen)).filter((value) => value > 0);
     if (!values.length) return 0;
-    return values.reduce((a, b) => a + b, 0) / values.length;
+    return values.reduce((acc, value) => acc + value, 0) / values.length;
   }, [performance]);
 
-  const formatMoney = (value: number) => {
-    return new Intl.NumberFormat('es-AR', {
-      style: 'currency',
-      currency: 'ARS',
-      maximumFractionDigits: 0,
-    }).format(value);
-  };
-
   function labelForPerformance(margen: number) {
-    if (avgMargin <= 0) {
-      if (margen > 0) return 'Rinde bien';
-      return 'Viene mal';
-    }
+    if (avgMargin <= 0) return margen > 0 ? 'Rinde bien' : 'Viene mal';
     if (margen >= avgMargin * 1.2) return 'Rinde bien';
     if (margen >= avgMargin * 0.7) return 'Rinde poco';
     return 'Viene mal';
   }
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     if (!isAdmin) return;
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (desde) params.set('desde', desde);
-      if (hasta) params.set('hasta', hasta);
-      const qs = params.toString();
-      const [rolesRes, usersRes, perfRes] = await Promise.all([
-        apiFetch('/api/roles'),
-        apiFetch('/api/usuarios'),
-        apiFetch(`/api/usuarios/rendimiento${qs ? `?${qs}` : ''}`),
+      const [rolesRes, usersRes, trashRes, perfRes, auditRes, mfaRes] = await Promise.all([
+        Api.roles(),
+        Api.usuarios(),
+        Api.usuariosPapelera(),
+        Api.usuariosRendimiento({ desde: desde || undefined, hasta: hasta || undefined }),
+        Api.auditLog({ limit: 20 }),
+        Api.mfaStatus().catch(() => null),
       ]);
-      setRoles(Array.isArray(rolesRes) ? rolesRes : []);
-      const manageableUsers = Array.isArray(usersRes)
-        ? usersRes.filter((u: Usuario) => u.rol === 'vendedor' || u.rol === 'fletero')
-        : [];
-      setUsuarios(manageableUsers);
-      setPerformance(Array.isArray(perfRes) ? perfRes : []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudieron cargar usuarios');
+
+      setRoles(Array.isArray(rolesRes) ? (rolesRes as Role[]) : []);
+      setUsuarios(
+        Array.isArray(usersRes)
+          ? (usersRes as Usuario[]).filter((user) => user.rol === 'vendedor' || user.rol === 'fletero')
+          : []
+      );
+      setDeletedUsuarios(Array.isArray(trashRes) ? (trashRes as Usuario[]) : []);
+      setPerformance(Array.isArray(perfRes) ? (perfRes as PerformanceRow[]) : []);
+      setAuditRows(Array.isArray(auditRes) ? (auditRes as AuditRow[]) : []);
+      setMfaStatus(mfaRes as MfaStatus | null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudieron cargar usuarios');
     } finally {
       setLoading(false);
     }
-  }
+  }, [desde, hasta, isAdmin]);
 
   useEffect(() => {
     loadData();
-  }, [isAdmin]);
+  }, [loadData]);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
     if (!selectedRoleId) {
       setError(`No se pudo resolver el rol ${selectedRole}`);
       return;
     }
+
+    setSaving(true);
     setError(null);
     setSuccess(null);
-    setSaving(true);
     try {
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         nombre: nombre.trim(),
         email: email.trim(),
         activo,
         rol_id: selectedRoleId,
         caja_tipo_default: cajaTipoDefault,
       };
-      if (password.trim()) {
-        payload.password = password.trim();
-      }
+
+      if (password.trim()) payload.password = password.trim();
+
       if (editingId) {
-        await apiFetch(`/api/usuarios/${editingId}`, {
-          method: 'PUT',
-          body: JSON.stringify(payload),
-        });
+        await Api.actualizarUsuario(editingId, payload);
         setSuccess('Usuario actualizado');
       } else {
         if (!payload.password) {
-          setError('La contraseña es obligatoria para crear el usuario');
+          setError('La contrasena es obligatoria para crear el usuario.');
           setSaving(false);
           return;
         }
-        await apiFetch('/api/usuarios', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
+        await Api.crearUsuario(payload);
         setSuccess('Usuario creado');
       }
-      setEditingId(null);
-      setNombre('');
-      setEmail('');
-      setPassword('');
-      setActivo(true);
+
+      cancelEdit();
       await loadData();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo guardar el usuario');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudo guardar el usuario');
     } finally {
       setSaving(false);
     }
@@ -194,8 +227,8 @@ export default function Usuarios() {
     setActivo(normalizeActive(usuario.activo));
     setSelectedRole(usuario.rol === 'fletero' ? 'fletero' : 'vendedor');
     setCajaTipoDefault(usuario.caja_tipo_default === 'home_office' ? 'home_office' : 'sucursal');
-    setSuccess(null);
     setError(null);
+    setSuccess(null);
   }
 
   function cancelEdit() {
@@ -206,8 +239,101 @@ export default function Usuarios() {
     setActivo(true);
     setSelectedRole('vendedor');
     setCajaTipoDefault('sucursal');
+  }
+
+  async function handleDeleteUser(id: number) {
+    const confirmed = window.confirm('Este usuario se enviara a papelera. Podras restaurarlo despues.');
+    if (!confirmed) return;
     setError(null);
     setSuccess(null);
+    try {
+      await Api.eliminarUsuario(id);
+      setSuccess('Usuario enviado a papelera');
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudo eliminar el usuario');
+    }
+  }
+
+  async function handleRestoreUser(id: number) {
+    setError(null);
+    setSuccess(null);
+    try {
+      await Api.restaurarUsuario(id);
+      setSuccess('Usuario restaurado');
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudo restaurar el usuario');
+    }
+  }
+
+  async function startMfaSetup() {
+    setMfaLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const result = (await Api.mfaSetup()) as any;
+      setMfaSetup({
+        qrCodeDataUrl: String(result.qrCodeDataUrl || ''),
+        otpauthUrl: String(result.otpauthUrl || ''),
+        secret: String(result.secret || ''),
+        expires_in_seconds: Number(result.expires_in_seconds || 0),
+      });
+      setMfaBackupCodes([]);
+      setSuccess('Escanea el QR y confirma con un codigo de 6 digitos.');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudo iniciar MFA');
+    } finally {
+      setMfaLoading(false);
+    }
+  }
+
+  async function confirmMfaSetup() {
+    if (!mfaConfirmCode.trim()) {
+      setError('Ingresa el codigo de tu app autenticadora.');
+      return;
+    }
+    setMfaLoading(true);
+    setError(null);
+    try {
+      const result = (await Api.mfaConfirm({ code: mfaConfirmCode.trim() })) as any;
+      setMfaBackupCodes(Array.isArray(result?.backup_codes) ? result.backup_codes : []);
+      setMfaSetup(null);
+      setMfaConfirmCode('');
+      setSuccess('MFA activado correctamente.');
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudo confirmar MFA');
+    } finally {
+      setMfaLoading(false);
+    }
+  }
+
+  async function disableMfa() {
+    const payload = useBackupForDisable
+      ? { backup_code: mfaDisableBackupCode.trim() }
+      : { totp_code: mfaDisableCode.trim() };
+
+    if (!payload.backup_code && !payload.totp_code) {
+      setError('Ingresa un codigo valido para desactivar MFA.');
+      return;
+    }
+
+    setMfaLoading(true);
+    setError(null);
+    try {
+      await Api.mfaDisable(payload);
+      setMfaSetup(null);
+      setMfaBackupCodes([]);
+      setMfaDisableCode('');
+      setMfaDisableBackupCode('');
+      setSuccess('MFA deshabilitado.');
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No se pudo desactivar MFA');
+    } finally {
+      setMfaLoading(false);
+    }
   }
 
   if (!isAdmin) {
@@ -221,20 +347,25 @@ export default function Usuarios() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <h2 className="text-xl font-semibold text-slate-100">Usuarios</h2>
-        <div className="flex flex-col sm:flex-row gap-2">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-100">Usuarios</h2>
+          <p className="text-sm text-slate-400">
+            Gestion operativa, seguridad MFA y trazabilidad de cambios sensibles.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input
             type="date"
             className="input-modern h-11 text-sm"
             value={desde}
-            onChange={(e) => setDesde(e.target.value)}
+            onChange={(event) => setDesde(event.target.value)}
           />
           <input
             type="date"
             className="input-modern h-11 text-sm"
             value={hasta}
-            onChange={(e) => setHasta(e.target.value)}
+            onChange={(event) => setHasta(event.target.value)}
           />
           <Button type="button" onClick={loadData} disabled={loading}>
             {loading ? 'Actualizando...' : 'Actualizar'}
@@ -245,9 +376,9 @@ export default function Usuarios() {
       {error && <Alert kind="error" message={error} />}
       {success && <Alert kind="info" message={success} />}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-5">
-          <div className="text-sm text-slate-300 mb-3">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <div className="mb-3 text-sm text-slate-300">
             {editingId ? 'Editar usuario' : 'Registrar usuario'}
           </div>
           <form onSubmit={onSubmit} className="space-y-4">
@@ -256,7 +387,7 @@ export default function Usuarios() {
               type="text"
               name="nombre"
               value={nombre}
-              onChange={(e) => setNombre(e.target.value)}
+              onChange={(event) => setNombre(event.target.value)}
               required
             />
             <TextInput
@@ -264,7 +395,7 @@ export default function Usuarios() {
               type="email"
               name="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(event) => setEmail(event.target.value)}
               required
             />
             <TextInput
@@ -272,43 +403,46 @@ export default function Usuarios() {
               type="password"
               name="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               required={!editingId}
             />
-              <label className="text-sm text-slate-200">
-                Rol
-                <select
-                  className="input-modern mt-2 w-full"
-                  value={selectedRole}
-                  onChange={(e) => setSelectedRole(e.target.value === 'fletero' ? 'fletero' : 'vendedor')}
-                >
-                  <option value="vendedor">Vendedor</option>
-                  <option value="fletero">Fletero</option>
-                </select>
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  checked={activo}
-                  onChange={(e) => setActivo(e.target.checked)}
-                />
-                Activo
-              </label>
-
-              <label className="text-sm text-slate-200">
-                Caja por defecto
-                <select
-                  className="input-modern mt-2 w-full"
-                  value={cajaTipoDefault}
-                  onChange={(e) => setCajaTipoDefault(e.target.value as 'home_office' | 'sucursal')}
-                >
-                  <option value="sucursal">Sucursal</option>
-                  <option value="home_office">Home office</option>
-                </select>
-              </label>
-
-            <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-200">
+              Rol
+              <select
+                className="input-modern mt-2 w-full"
+                value={selectedRole}
+                onChange={(event) =>
+                  setSelectedRole(event.target.value === 'fletero' ? 'fletero' : 'vendedor')
+                }
+              >
+                <option value="vendedor">Vendedor</option>
+                <option value="fletero">Fletero</option>
+              </select>
+            </label>
+            <label className="text-sm text-slate-200">
+              Caja por defecto
+              <select
+                className="input-modern mt-2 w-full"
+                value={cajaTipoDefault}
+                onChange={(event) =>
+                  setCajaTipoDefault(
+                    event.target.value === 'home_office' ? 'home_office' : 'sucursal'
+                  )
+                }
+              >
+                <option value="sucursal">Sucursal</option>
+                <option value="home_office">Home office</option>
+              </select>
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={activo}
+                onChange={(event) => setActivo(event.target.checked)}
+              />
+              Activo
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" disabled={saving}>
                 {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear usuario'}
               </Button>
@@ -319,130 +453,306 @@ export default function Usuarios() {
               )}
             </div>
           </form>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <div className="mb-2 text-sm font-medium text-slate-100">
+            Seguridad del administrador
+          </div>
+          <div className="text-xs text-slate-400">
+            Protege este acceso con TOTP. El segundo factor se pedira en cada login del admin.
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+            <div className="text-sm text-slate-200">
+              MFA {mfaStatus?.enabled ? 'activo' : 'inactivo'}
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              Codigos de respaldo disponibles: {mfaStatus?.backup_codes_remaining ?? 0}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {!mfaStatus?.enabled ? (
+                <Button type="button" onClick={startMfaSetup} disabled={mfaLoading}>
+                  {mfaLoading ? 'Preparando...' : 'Activar MFA'}
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" onClick={disableMfa} disabled={mfaLoading}>
+                  {mfaLoading ? 'Procesando...' : 'Desactivar MFA'}
+                </Button>
+              )}
+            </div>
+
+            {!mfaStatus?.enabled && mfaSetup && (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-4">
+                  <div className="text-xs uppercase tracking-[0.2em] text-cyan-200">Paso 1</div>
+                  <div className="mt-2 text-sm text-slate-200">
+                    Escanea este QR con Google Authenticator, Authy u otra app compatible.
+                  </div>
+                  {mfaSetup.qrCodeDataUrl ? (
+                    <img
+                      src={mfaSetup.qrCodeDataUrl}
+                      alt="QR para activar MFA"
+                      className="mt-4 h-48 w-48 rounded-2xl bg-white p-3"
+                    />
+                  ) : null}
+                  <div className="mt-3 text-xs text-slate-400 break-all">
+                    Secret manual: <span className="text-slate-200">{mfaSetup.secret}</span>
+                  </div>
+                </div>
+                <TextInput
+                  label="Codigo de autenticacion"
+                  type="text"
+                  name="mfa-confirm-code"
+                  value={mfaConfirmCode}
+                  onChange={(event) => setMfaConfirmCode(event.target.value)}
+                  placeholder="000000"
+                />
+                <Button type="button" onClick={confirmMfaSetup} disabled={mfaLoading}>
+                  {mfaLoading ? 'Confirmando...' : 'Confirmar activacion'}
+                </Button>
+              </div>
+            )}
+
+            {mfaStatus?.enabled && (
+              <div className="mt-4 space-y-4">
+                <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={useBackupForDisable}
+                    onChange={(event) => setUseBackupForDisable(event.target.checked)}
+                  />
+                  Usar codigo de respaldo para desactivar
+                </label>
+                {useBackupForDisable ? (
+                  <TextInput
+                    label="Codigo de respaldo"
+                    type="text"
+                    name="mfa-disable-backup"
+                    value={mfaDisableBackupCode}
+                    onChange={(event) => setMfaDisableBackupCode(event.target.value)}
+                    placeholder="ABCD-1234"
+                  />
+                ) : (
+                  <TextInput
+                    label="Codigo TOTP actual"
+                    type="text"
+                    name="mfa-disable-code"
+                    value={mfaDisableCode}
+                    onChange={(event) => setMfaDisableCode(event.target.value)}
+                    placeholder="000000"
+                  />
+                )}
+              </div>
+            )}
+
+            {mfaBackupCodes.length > 0 && (
+              <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
+                <div className="text-sm font-medium text-amber-100">Guarda estos codigos ahora</div>
+                <div className="mt-2 text-xs text-slate-300">
+                  Cada codigo sirve una sola vez. Si los pierdes, tendras que volver a configurar MFA.
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-100">
+                  {mfaBackupCodes.map((code) => (
+                    <div key={code} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 font-mono">
+                      {code}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-slate-100">Vendedores y fleteros</div>
+            <div className="text-xs text-slate-400">
+              Estado operativo y rendimiento resumido por usuario.
+            </div>
+          </div>
+          <div className="text-xs text-slate-400">
+            {usuarios.length} activo{usuarios.length === 1 ? '' : 's'}
+          </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.04),0_0_0_1px_rgba(139,92,246,0.15),0_8px_20px_rgba(34,211,238,0.08)] p-5">
-          <div className="text-sm text-slate-300 mb-3">Vendedores y fleteros</div>
-          <div className="overflow-x-auto">
-            {isMobile ? (
-              <div className="space-y-3">
-                {usuarios.map((u) => {
-                  const isFleteroRow = u.rol === 'fletero';
-                  const perf = perfById.get(u.id);
-                  const margen = isFleteroRow ? 0 : perf ? toNumber(perf.margen) : 0;
-                  const total = isFleteroRow ? 0 : perf ? toNumber(perf.total_ventas) : 0;
-                  const ventasCount = isFleteroRow ? 0 : perf ? toNumber(perf.ventas_count) : 0;
-                  const label = isFleteroRow ? 'N/A' : labelForPerformance(margen);
-                  const activoUsuario = normalizeActive(u.activo);
+        <div className="overflow-x-auto">
+          {isMobile ? (
+            <div className="space-y-3">
+              {usuarios.map((usuario) => {
+                const perf = perfById.get(usuario.id);
+                const margen = perf ? toNumber(perf.margen) : 0;
+                const total = perf ? toNumber(perf.total_ventas) : 0;
+                const ventasCount = perf ? toNumber(perf.ventas_count) : 0;
+                return (
+                  <article key={usuario.id} className="app-panel space-y-3 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-medium text-slate-100">{usuario.nombre || usuario.email}</div>
+                        <div className="text-xs text-slate-400">{usuario.email}</div>
+                      </div>
+                      <span className="text-xs text-slate-300">{usuario.rol || '-'}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="app-panel p-2">
+                        <div className="text-slate-400">Ventas</div>
+                        <div className="font-medium text-slate-100">{ventasCount}</div>
+                      </div>
+                      <div className="app-panel p-2">
+                        <div className="text-slate-400">Total</div>
+                        <div className="font-medium text-slate-100">{formatMoney(total)}</div>
+                      </div>
+                      <div className="app-panel p-2">
+                        <div className="text-slate-400">Margen</div>
+                        <div className="font-medium text-slate-100">{formatMoney(margen)}</div>
+                      </div>
+                      <div className="app-panel p-2">
+                        <div className="text-slate-400">Rendimiento</div>
+                        <div className="font-medium text-slate-100">{labelForPerformance(margen)}</div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" onClick={() => startEdit(usuario)}>
+                        Editar
+                      </Button>
+                      <Button type="button" variant="ghost" onClick={() => handleDeleteUser(usuario.id)}>
+                        Papelera
+                      </Button>
+                    </div>
+                  </article>
+                );
+              })}
+              {!usuarios.length && (
+                <div className="app-panel p-4 text-center text-slate-400">No hay usuarios registrados.</div>
+              )}
+            </div>
+          ) : (
+            <table className="min-w-full text-sm text-slate-200">
+              <thead className="text-left text-xs uppercase text-slate-400">
+                <tr>
+                  <th className="py-2">Usuario</th>
+                  <th className="py-2">Rol</th>
+                  <th className="py-2">Ventas</th>
+                  <th className="py-2">Total</th>
+                  <th className="py-2">Margen</th>
+                  <th className="py-2">Rendimiento</th>
+                  <th className="py-2">Estado</th>
+                  <th className="py-2">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {usuarios.map((usuario) => {
+                  const perf = perfById.get(usuario.id);
+                  const margen = perf ? toNumber(perf.margen) : 0;
+                  const total = perf ? toNumber(perf.total_ventas) : 0;
+                  const ventasCount = perf ? toNumber(perf.ventas_count) : 0;
                   return (
-                    <article key={u.id} className="app-panel p-3 space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="font-medium text-slate-100">{u.nombre || u.email}</div>
-                          <div className="text-xs text-slate-400">{u.email}</div>
-                        </div>
-                        <span className="text-xs text-slate-300">{u.rol || '-'}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div className="app-panel p-2">
-                          <div className="text-slate-400">Ventas</div>
-                          <div className="text-slate-100 font-medium">{ventasCount}</div>
-                        </div>
-                        <div className="app-panel p-2">
-                          <div className="text-slate-400">Total</div>
-                          <div className="text-slate-100 font-medium">{formatMoney(total)}</div>
-                        </div>
-                        <div className="app-panel p-2">
-                          <div className="text-slate-400">Margen</div>
-                          <div className="text-slate-100 font-medium">{formatMoney(margen)}</div>
-                        </div>
-                        <div className="app-panel p-2">
-                          <div className="text-slate-400">Rendimiento</div>
-                          <div className="text-slate-100 font-medium">{label}</div>
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-slate-300">{activoUsuario ? 'Activo' : 'Inactivo'}</span>
+                    <tr key={usuario.id}>
+                      <td className="py-2">
+                        <div className="font-medium">{usuario.nombre || usuario.email}</div>
+                        <div className="text-xs text-slate-400">{usuario.email}</div>
+                      </td>
+                      <td className="py-2">{usuario.rol || '-'}</td>
+                      <td className="py-2">{ventasCount}</td>
+                      <td className="py-2">{formatMoney(total)}</td>
+                      <td className="py-2">{formatMoney(margen)}</td>
+                      <td className="py-2">{labelForPerformance(margen)}</td>
+                      <td className="py-2">{normalizeActive(usuario.activo) ? 'Activo' : 'Inactivo'}</td>
+                      <td className="py-2 space-x-2">
                         <button
                           type="button"
-                          className="touch-target px-3 py-1.5 rounded bg-indigo-500/20 border border-indigo-500/30 text-indigo-200 text-xs"
-                          onClick={() => startEdit(u)}
+                          className="text-xs text-indigo-300 hover:text-indigo-200"
+                          onClick={() => startEdit(usuario)}
                         >
                           Editar
                         </button>
-                      </div>
-                    </article>
+                        <button
+                          type="button"
+                          className="text-xs text-rose-300 hover:text-rose-200"
+                          onClick={() => handleDeleteUser(usuario.id)}
+                        >
+                          Papelera
+                        </button>
+                      </td>
+                    </tr>
                   );
                 })}
                 {!usuarios.length && (
-                  <div className="py-4 text-center text-slate-400 app-panel">No hay usuarios registrados.</div>
-                )}
-              </div>
-            ) : (
-              <table className="min-w-full text-sm text-slate-200">
-                <thead className="text-xs uppercase text-slate-400">
                   <tr>
-                    <th className="text-left py-2">Usuario</th>
-                    <th className="text-left py-2">Rol</th>
-                    <th className="text-left py-2">Ventas</th>
-                    <th className="text-left py-2">Total</th>
-                    <th className="text-left py-2">Margen</th>
-                    <th className="text-left py-2">Rendimiento</th>
-                    <th className="text-left py-2">Estado</th>
-                    <th className="text-left py-2">Acciones</th>
+                    <td colSpan={8} className="py-4 text-center text-slate-400">
+                      No hay usuarios registrados.
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-white/10">
-                  {usuarios.map((u) => {
-                    const isFleteroRow = u.rol === 'fletero';
-                    const perf = perfById.get(u.id);
-                    const margen = isFleteroRow ? 0 : perf ? toNumber(perf.margen) : 0;
-                    const total = isFleteroRow ? 0 : perf ? toNumber(perf.total_ventas) : 0;
-                    const ventasCount = isFleteroRow ? 0 : perf ? toNumber(perf.ventas_count) : 0;
-                    const label = isFleteroRow ? 'N/A' : labelForPerformance(margen);
-                    const activoUsuario = normalizeActive(u.activo);
-                    return (
-                      <tr key={u.id}>
-                        <td className="py-2">
-                          <div className="font-medium">{u.nombre || u.email}</div>
-                          <div className="text-xs text-slate-400">{u.email}</div>
-                        </td>
-                        <td className="py-2">{u.rol || '-'}</td>
-                        <td className="py-2">{ventasCount}</td>
-                        <td className="py-2">{formatMoney(total)}</td>
-                        <td className="py-2">{formatMoney(margen)}</td>
-                        <td className="py-2">
-                          <span className="inline-flex items-center rounded-full bg-white/10 px-2 py-0.5 text-xs">
-                            {label}
-                          </span>
-                        </td>
-                        <td className="py-2">{activoUsuario ? 'Activo' : 'Inactivo'}</td>
-                        <td className="py-2">
-                          <button
-                            type="button"
-                            className="text-xs text-indigo-300 hover:text-indigo-200"
-                            onClick={() => startEdit(u)}
-                          >
-                            Editar
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {!usuarios.length && (
-                    <tr>
-                      <td colSpan={8} className="py-4 text-center text-slate-400">
-                        No hay usuarios registrados.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <div className="mb-3 text-sm font-medium text-slate-100">Papelera de usuarios</div>
+          <div className="space-y-3">
+            {deletedUsuarios.map((usuario) => (
+              <div
+                key={usuario.id}
+                className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 md:flex-row md:items-center md:justify-between"
+              >
+                <div>
+                  <div className="font-medium text-slate-100">{usuario.nombre || usuario.email}</div>
+                  <div className="text-xs text-slate-400">{usuario.email}</div>
+                </div>
+                <Button type="button" variant="outline" onClick={() => handleRestoreUser(usuario.id)}>
+                  Restaurar
+                </Button>
+              </div>
+            ))}
+            {!deletedUsuarios.length && (
+              <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-sm text-slate-400">
+                No hay usuarios en papelera.
+              </div>
             )}
           </div>
-        </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <div className="mb-3 text-sm font-medium text-slate-100">Audit log reciente</div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm text-slate-200">
+              <thead className="text-left text-xs uppercase text-slate-400">
+                <tr>
+                  <th className="py-2">Fecha</th>
+                  <th className="py-2">Usuario</th>
+                  <th className="py-2">Accion</th>
+                  <th className="py-2">IP</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {auditRows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="py-2 text-xs text-slate-300">
+                      {row.created_at ? new Date(row.created_at).toLocaleString() : '-'}
+                    </td>
+                    <td className="py-2 text-xs">{row.usuario_email || 'sistema'}</td>
+                    <td className="py-2 text-xs">{formatAuditAction(row)}</td>
+                    <td className="py-2 text-xs text-slate-400">{row.ip_address || '-'}</td>
+                  </tr>
+                ))}
+                {!auditRows.length && (
+                  <tr>
+                    <td colSpan={4} className="py-4 text-center text-slate-400">
+                      Sin movimientos auditados todavia.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </div>
   );
 }
-

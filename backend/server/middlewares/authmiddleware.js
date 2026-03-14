@@ -1,14 +1,14 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const jwtBlacklistRepo = require('../db/repositories/jwtBlacklistRepository');
+const {
+  isTokenRevoked,
+  markTokenRevoked,
+} = require('../services/tokenRevocationStore');
 
-// Claves y parametros JWT, desde variables de entorno
 const SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.REFRESH_TOKEN_SECRET;
 const JWT_ALG = process.env.JWT_ALG || 'HS256';
-
-// Lista negra de tokens JWT invalidados (memoria + DB)
-const tokenBlacklist = new Map();
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
@@ -34,16 +34,6 @@ function resolveExpiryMs(decoded) {
   return Date.now() + 24 * 60 * 60 * 1000;
 }
 
-function isBlacklistedLocal(token) {
-  const exp = tokenBlacklist.get(token);
-  if (!exp) return false;
-  if (Date.now() >= exp) {
-    tokenBlacklist.delete(token);
-    return false;
-  }
-  return true;
-}
-
 function normalizeReqPath(req) {
   const fromPath = String(req?.path || '').trim();
   if (fromPath.startsWith('/api/')) return fromPath;
@@ -62,75 +52,74 @@ function isFleteroAllowedRequest(req) {
   return false;
 }
 
-/**
- * Middleware para verificar el token JWT de acceso.
- * Extrae el token del encabezado 'Authorization', lo verifica y adjunta la informacion del usuario a la solicitud.
- * Tambien verifica si el token esta en la lista negra.
- * @param {object} req - Objeto de solicitud de Express.
- * @param {object} res - Objeto de respuesta de Express.
- * @param {function} next - Funcion para pasar el control al siguiente middleware.
- */
 async function authMiddleware(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Extraer el token del encabezado 'Bearer <token>'
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({ error: 'Token de acceso requerido' });
+    return res.status(401).json({ error: 'Token de acceso requerido', code: 'SESSION_EXPIRED' });
   }
 
-  // Verificar que la clave secreta de JWT este definida
   if (!SECRET) {
-    console.error('Error: La variable de entorno JWT_SECRET no esta definida para la verificacion del token.');
+    console.error('JWT_SECRET no esta definida para verificar access tokens.');
     return res.status(500).json({ error: 'Configuracion del servidor incompleta.' });
-  }
-
-  // Verificar si el token esta en la lista negra (memoria/DB)
-  if (isBlacklistedLocal(token)) {
-    return res.status(401).json({ error: 'Token invalido o revocado' });
   }
 
   try {
     const decoded = decodeToken(token);
     const jti = deriveJti(token, decoded);
+
+    if (await isTokenRevoked({ jti, token })) {
+      return res.status(401).json({ error: 'Token invalido o revocado', code: 'SESSION_EXPIRED' });
+    }
+
     const blacklisted = await jwtBlacklistRepo.isBlacklisted({ jti, token });
     if (blacklisted) {
-      tokenBlacklist.set(token, resolveExpiryMs(decoded));
-      return res.status(401).json({ error: 'Token invalido o revocado' });
+      await markTokenRevoked({
+        jti,
+        token,
+        expiresAtMs: resolveExpiryMs(decoded),
+      });
+      return res.status(401).json({ error: 'Token invalido o revocado', code: 'SESSION_EXPIRED' });
     }
 
     const verifyOptions = { algorithms: [JWT_ALG] };
     if (process.env.JWT_ISSUER) verifyOptions.issuer = process.env.JWT_ISSUER;
     if (process.env.JWT_AUDIENCE) verifyOptions.audience = process.env.JWT_AUDIENCE;
-    const user = jwt.verify(token, SECRET, verifyOptions); // Verificar el token con restricciones
+
+    const user = jwt.verify(token, SECRET, verifyOptions);
     if (user && user.role === 'cliente') {
-      return res.status(403).json({ error: 'Token de cliente no autorizado' });
+      return res.status(403).json({ error: 'Token de cliente no autorizado', code: 'FORBIDDEN' });
     }
     if (user && user.role === 'fletero' && !isFleteroAllowedRequest(req)) {
-      return res.status(403).json({ error: 'Perfil fletero sin permisos para este recurso' });
+      return res
+        .status(403)
+        .json({ error: 'Perfil fletero sin permisos para este recurso', code: 'FORBIDDEN' });
     }
-    req.user = user; // Adjuntar info del usuario a la solicitud
-    req.token = token; // Adjuntar el token actual para posible invalidacion
-    next(); // Continuar con la siguiente funcion de middleware o ruta
+
+    req.user = user;
+    req.token = token;
+    return next();
   } catch (err) {
-    console.error('Error de verificacion de token:', err.message);
-    // 401 permite que el frontend intente refrescar el access token con el refresh token
-    return res.status(401).json({ error: 'Token invalido o expirado' });
+    console.error('Error de verificacion de token:', err?.message || err);
+    return res.status(401).json({ error: 'Token invalido o expirado', code: 'SESSION_EXPIRED' });
   }
 }
 
-/**
- * Agrega un token a la lista negra.
- * @param {string} token - El token JWT a invalidar.
- */
 function addTokenToBlacklist(token) {
   if (!token) return;
   const decoded = decodeToken(token);
   const jti = deriveJti(token, decoded);
   const expMs = resolveExpiryMs(decoded);
-  tokenBlacklist.set(token, expMs);
+
+  markTokenRevoked({ jti, token, expiresAtMs: expMs }).catch((err) =>
+    console.error('Runtime blacklist error:', err?.message || err)
+  );
+
   jwtBlacklistRepo
     .add({ jti, token, expires_at: new Date(expMs) })
     .catch((err) => console.error('Blacklist persist error:', err?.message || err));
+
   if (Math.random() < 0.05) {
     jwtBlacklistRepo.cleanupExpired().catch(() => {});
   }

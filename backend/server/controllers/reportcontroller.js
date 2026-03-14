@@ -1,7 +1,9 @@
 const { query } = require('../db/pg');
 const PDFDocument = require('pdfkit');
+const logger = require('../lib/logger');
 const ExcelJS = require('exceljs');
 const configRepo = require('../db/repositories/configRepository');
+const { listSalesDailyAggregates } = require('../services/salesDailyAggregateService');
 
 async function deudas(req, res) {
   try {
@@ -115,6 +117,126 @@ function normalizeNumber(value, fallback = 0) {
 
 function formatCurrency(value) {
   return `$ ${normalizeNumber(value, 0).toFixed(2)}`;
+}
+
+function formatCsvValue(value) {
+  const raw = value == null ? '' : String(value);
+  return `"${raw.replace(/"/g, '""')}"`;
+}
+
+function parseJsonSafe(value) {
+  if (!value) return null;
+  try {
+    if (typeof value === 'object') return value;
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseMonthParam(value) {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return null;
+  const [yearStr, monthStr] = raw.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return null;
+  }
+  const from = `${yearStr}-${monthStr}-01`;
+  const nextMonth = month === 12 ? new Date(Date.UTC(year + 1, 0, 1)) : new Date(Date.UTC(year, month, 1));
+  nextMonth.setUTCDate(0);
+  const to = nextMonth.toISOString().slice(0, 10);
+  return { from, to };
+}
+
+function parseFacturaNumeroParts(factura) {
+  const numeroFactura = String(factura?.numero_factura || '').trim();
+  if (numeroFactura.includes('-')) {
+    const [pv, num] = numeroFactura.split('-');
+    return {
+      puntoVenta: pv || String(factura?.punto_venta || '').padStart(4, '0'),
+      numero: num || '',
+    };
+  }
+  return {
+    puntoVenta: factura?.punto_venta != null ? String(factura.punto_venta).padStart(4, '0') : '',
+    numero: numeroFactura,
+  };
+}
+
+function buildLibroIvaEntry(row) {
+  const snapshot = parseJsonSafe(row.snapshot_json);
+  const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+  const ivaBreakdown = {
+    '10.5': 0,
+    '21': 0,
+    '27': 0,
+  };
+  let netoGravado = 0;
+  let exento = 0;
+
+  if (items.length) {
+    for (const item of items) {
+      const rate = Number(item?.iva_alicuota || 0);
+      const base = Number(item?.base != null ? item.base : item?.subtotal || 0) || 0;
+      netoGravado += rate > 0 ? base : 0;
+      exento += rate > 0 ? 0 : base;
+      if (Math.abs(rate - 10.5) < 0.001) ivaBreakdown['10.5'] += Number(item?.iva || 0) || 0;
+      else if (Math.abs(rate - 21) < 0.001) ivaBreakdown['21'] += Number(item?.iva || 0) || 0;
+      else if (Math.abs(rate - 27) < 0.001) ivaBreakdown['27'] += Number(item?.iva || 0) || 0;
+    }
+  } else {
+    netoGravado = Number(row.imp_neto || 0) || 0;
+    exento = Number(row.imp_op_ex || 0) || 0;
+    ivaBreakdown['21'] = Number(row.imp_iva || 0) || 0;
+  }
+
+  const numeroParts = parseFacturaNumeroParts(row);
+  const clienteNombre = [row.cliente_nombre, row.cliente_apellido].filter(Boolean).join(' ').trim();
+  const documento = row.doc_nro || row.nro_doc || row.cuit_cuil || '';
+  const total = Number(row.total || 0) || 0;
+
+  return {
+    fecha: row.fecha_emision ? String(row.fecha_emision).slice(0, 10) : '',
+    tipo: row.tipo_comprobante || '',
+    punto_venta: numeroParts.puntoVenta,
+    numero: numeroParts.numero,
+    cliente: clienteNombre || row.razon_social || `Cliente #${row.cliente_id}`,
+    documento,
+    condicion_iva: row.condicion_iva || '',
+    neto_gravado: Number(netoGravado.toFixed(2)),
+    iva_10_5: Number(ivaBreakdown['10.5'].toFixed(2)),
+    iva_21: Number(ivaBreakdown['21'].toFixed(2)),
+    iva_27: Number(ivaBreakdown['27'].toFixed(2)),
+    exento: Number(exento.toFixed(2)),
+    total: Number(total.toFixed(2)),
+    cae: row.cae || '',
+    cae_vto: row.cae_vto || '',
+  };
+}
+
+function buildLibroIvaSummary(rows) {
+  return rows.reduce(
+    (acc, row) => ({
+      comprobantes: acc.comprobantes + 1,
+      neto_gravado: Number((acc.neto_gravado + Number(row.neto_gravado || 0)).toFixed(2)),
+      iva_10_5: Number((acc.iva_10_5 + Number(row.iva_10_5 || 0)).toFixed(2)),
+      iva_21: Number((acc.iva_21 + Number(row.iva_21 || 0)).toFixed(2)),
+      iva_27: Number((acc.iva_27 + Number(row.iva_27 || 0)).toFixed(2)),
+      exento: Number((acc.exento + Number(row.exento || 0)).toFixed(2)),
+      total: Number((acc.total + Number(row.total || 0)).toFixed(2)),
+    }),
+    {
+      comprobantes: 0,
+      neto_gravado: 0,
+      iva_10_5: 0,
+      iva_21: 0,
+      iva_27: 0,
+      exento: 0,
+      total: 0,
+    }
+  );
 }
 
 function percentChange(current, previous) {
@@ -243,50 +365,83 @@ async function movimientos(req, res) {
       );
       rows = qrows;
     } else {
-      // Agregado diario: combinar ventas (neto) y gastos
-      const { rows: qrows } = await query(
-        `WITH RECURSIVE rango(fecha) AS (
-           SELECT date($1)
-           UNION ALL
-           SELECT date(fecha, '+1 day') FROM rango WHERE fecha < date($2)
-         ),
-         ventas_d AS (
-           SELECT date(fecha, 'localtime') AS fecha, SUM(neto) AS total_ventas
-             FROM ventas
-            WHERE date(fecha, 'localtime') >= date($1) AND date(fecha, 'localtime') <= date($2)
-            GROUP BY date(fecha, 'localtime')
-         ),
-         deudas_ini_d AS (
-           SELECT date(fecha, 'localtime') AS fecha, SUM(monto) AS total_deudas_ini
-             FROM clientes_deudas_iniciales_pagos
-            WHERE date(fecha, 'localtime') >= date($1) AND date(fecha, 'localtime') <= date($2)
-            GROUP BY date(fecha, 'localtime')
-         ),
-         gastos_d AS (
-           SELECT date(fecha, 'localtime') AS fecha, SUM(monto) AS total_gastos
-             FROM gastos
-            WHERE date(fecha, 'localtime') >= date($1) AND date(fecha, 'localtime') <= date($2)
-            GROUP BY date(fecha, 'localtime')
-         )
-         SELECT r.fecha,
-                COALESCE(v.total_ventas, 0) + COALESCE(di.total_deudas_ini, 0) AS total_ventas,
-                COALESCE(g.total_gastos, 0) AS total_gastos,
-                (COALESCE(v.total_ventas, 0) + COALESCE(di.total_deudas_ini, 0)) - COALESCE(g.total_gastos, 0) AS ganancia_neta
-           FROM rango r
-      LEFT JOIN ventas_d v ON v.fecha = r.fecha
-      LEFT JOIN deudas_ini_d di ON di.fecha = r.fecha
-      LEFT JOIN gastos_d g ON g.fecha = r.fecha
-          ORDER BY r.fecha`,
-        [fromDate.toISOString().slice(0, 10), toDate.toISOString().slice(0, 10)]
-      );
-      rows = qrows;
+      try {
+        rows = await listSalesDailyAggregates({
+          from: fromDate.toISOString().slice(0, 10),
+          to: toDate.toISOString().slice(0, 10),
+        });
+      } catch (aggregateErr) {
+        const { rows: qrows } = await query(
+          `WITH RECURSIVE rango(fecha) AS (
+             SELECT date($1)
+             UNION ALL
+             SELECT date(fecha, '+1 day') FROM rango WHERE fecha < date($2)
+           ),
+           ventas_d AS (
+             SELECT date(fecha, 'localtime') AS fecha,
+                    SUM(neto) AS total_ventas
+               FROM ventas
+              WHERE date(fecha, 'localtime') >= date($1) AND date(fecha, 'localtime') <= date($2)
+              GROUP BY date(fecha, 'localtime')
+           ),
+           margen_d AS (
+             SELECT date(v.fecha, 'localtime') AS fecha,
+                    COALESCE(
+                      SUM(
+                        COALESCE(d.base_sin_iva, d.subtotal, 0) -
+                        (COALESCE(d.costo_unitario_pesos, 0) * COALESCE(d.cantidad, 0))
+                      ),
+                      0
+                    ) AS margen_total
+               FROM ventas v
+               LEFT JOIN ventas_detalle d ON d.venta_id = v.id
+              WHERE date(v.fecha, 'localtime') >= date($1) AND date(v.fecha, 'localtime') <= date($2)
+                AND v.estado_pago <> 'cancelado'
+                AND COALESCE(v.oculto, 0) = 0
+              GROUP BY date(v.fecha, 'localtime')
+           ),
+           deudas_ini_d AS (
+             SELECT date(fecha, 'localtime') AS fecha, SUM(monto) AS total_deudas_iniciales
+               FROM clientes_deudas_iniciales_pagos
+              WHERE date(fecha, 'localtime') >= date($1) AND date(fecha, 'localtime') <= date($2)
+              GROUP BY date(fecha, 'localtime')
+           ),
+           gastos_d AS (
+             SELECT date(fecha, 'localtime') AS fecha, SUM(monto) AS total_gastos
+               FROM gastos
+              WHERE date(fecha, 'localtime') >= date($1) AND date(fecha, 'localtime') <= date($2)
+              GROUP BY date(fecha, 'localtime')
+           )
+           SELECT r.fecha,
+                  COALESCE(v.total_ventas, 0) AS total_ventas,
+                  COALESCE(di.total_deudas_iniciales, 0) AS total_deudas_iniciales,
+                  COALESCE(g.total_gastos, 0) AS total_gastos,
+                  COALESCE(m.margen_total, 0) AS margen_total
+             FROM rango r
+        LEFT JOIN ventas_d v ON v.fecha = r.fecha
+        LEFT JOIN margen_d m ON m.fecha = r.fecha
+        LEFT JOIN deudas_ini_d di ON di.fecha = r.fecha
+        LEFT JOIN gastos_d g ON g.fecha = r.fecha
+            ORDER BY r.fecha`,
+          [fromDate.toISOString().slice(0, 10), toDate.toISOString().slice(0, 10)]
+        );
+        rows = qrows;
+        logger.warn(
+          '[reportes/movimientos] aggregate fallback enabled:',
+          aggregateErr?.message || aggregateErr
+        );
+      }
     }
 
     const data = rows.map((r) => ({
       fecha: r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : r.fecha,
-      totalVentas: Number(r.total_ventas || 0),
+      totalVentas: Number(r.total_ventas || 0) + Number(r.total_deudas_iniciales || 0),
       totalGastos: Number(r.total_gastos || 0),
-      gananciaNeta: Number(r.ganancia_neta || 0),
+      margenTotal: Number(r.margen_total || 0),
+      gananciaNeta:
+        Number(r.total_ventas || 0) +
+        Number(r.total_deudas_iniciales || 0) -
+        Number(r.total_gastos || 0),
     }));
 
     res.json(data);
@@ -1441,8 +1596,139 @@ async function gananciasPdf(req, res) {
 
     doc.end();
   } catch (e) {
-    console.error('[reportes] gananciasPdf error', e);
+    logger.error({ err: e }, '[reportes] gananciasPdf error');
     res.status(500).json({ error: 'No se pudo generar el informe de ganancias' });
+  }
+}
+
+async function libroIvaDigital(req, res) {
+  try {
+    const tipo = String(req.query?.tipo || 'ventas').trim().toLowerCase();
+    if (tipo !== 'ventas') {
+      return res.status(400).json({ error: 'Solo se soporta tipo=ventas por el momento' });
+    }
+
+    const monthRange = parseMonthParam(req.query?.mes);
+    if (!monthRange) {
+      return res.status(400).json({ error: 'Parametro mes invalido. Usa formato YYYY-MM' });
+    }
+
+    const format = String(req.query?.format || 'json').trim().toLowerCase();
+    const { rows } = await query(
+      `SELECT f.*,
+              v.fecha AS venta_fecha,
+              v.cliente_id,
+              c.nombre AS cliente_nombre,
+              c.apellido AS cliente_apellido,
+              c.cuit_cuil,
+              c.nro_doc,
+              c.condicion_iva
+         FROM facturas f
+         JOIN ventas v ON v.id = f.venta_id
+    LEFT JOIN clientes c ON c.id = v.cliente_id
+        WHERE DATE(COALESCE(f.fecha_emision, v.fecha)) >= DATE($1)
+          AND DATE(COALESCE(f.fecha_emision, v.fecha)) <= DATE($2)
+          AND f.estado = 'emitida'
+        ORDER BY DATE(COALESCE(f.fecha_emision, v.fecha)) ASC, f.numero_factura ASC`,
+      [monthRange.from, monthRange.to]
+    );
+
+    const data = (rows || []).map(buildLibroIvaEntry);
+    const summary = buildLibroIvaSummary(data);
+
+    if (format === 'csv') {
+      const header = [
+        'Fecha',
+        'Tipo',
+        'Punto de venta',
+        'Numero',
+        'Cliente',
+        'Documento',
+        'Condicion IVA',
+        'Neto gravado',
+        'IVA 10.5',
+        'IVA 21',
+        'IVA 27',
+        'Exento',
+        'Total',
+        'CAE',
+        'Vto CAE',
+      ];
+      const csvRows = [
+        header.join(','),
+        ...data.map((row) =>
+          [
+            row.fecha,
+            row.tipo,
+            row.punto_venta,
+            row.numero,
+            row.cliente,
+            row.documento,
+            row.condicion_iva,
+            row.neto_gravado,
+            row.iva_10_5,
+            row.iva_21,
+            row.iva_27,
+            row.exento,
+            row.total,
+            row.cae,
+            row.cae_vto,
+          ]
+            .map(formatCsvValue)
+            .join(',')
+        ),
+      ].join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="libro-iva-ventas-${req.query.mes}.csv"`
+      );
+      return res.send(csvRows);
+    }
+
+    if (format === 'xlsx') {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Libro IVA Ventas');
+      sheet.columns = [
+        { header: 'Fecha', key: 'fecha', width: 14 },
+        { header: 'Tipo', key: 'tipo', width: 10 },
+        { header: 'Punto de venta', key: 'punto_venta', width: 14 },
+        { header: 'Numero', key: 'numero', width: 16 },
+        { header: 'Cliente', key: 'cliente', width: 28 },
+        { header: 'Documento', key: 'documento', width: 18 },
+        { header: 'Condicion IVA', key: 'condicion_iva', width: 22 },
+        { header: 'Neto gravado', key: 'neto_gravado', width: 16 },
+        { header: 'IVA 10.5', key: 'iva_10_5', width: 14 },
+        { header: 'IVA 21', key: 'iva_21', width: 14 },
+        { header: 'IVA 27', key: 'iva_27', width: 14 },
+        { header: 'Exento', key: 'exento', width: 14 },
+        { header: 'Total', key: 'total', width: 14 },
+        { header: 'CAE', key: 'cae', width: 18 },
+        { header: 'Vto CAE', key: 'cae_vto', width: 14 },
+      ];
+      data.forEach((row) => sheet.addRow(row));
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.getRow(1).font = { bold: true };
+      const buffer = await workbook.xlsx.writeBuffer();
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="libro-iva-ventas-${req.query.mes}.xlsx"`
+      );
+      return res.send(Buffer.from(buffer));
+    }
+
+    return res.json({
+      mes: req.query.mes,
+      tipo,
+      summary,
+      rows: data,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'No se pudo generar el libro IVA' });
   }
 }
 
@@ -1459,6 +1745,7 @@ module.exports = {
   movimientosDiaProductos,
   movimientosVentasExcel,
   gananciasPdf,
+  libroIvaDigital,
 };
 
 // PDF Remito de entrega por venta
@@ -1701,7 +1988,7 @@ async function remitoPdf(req, res) {
 
     doc.end();
   } catch (e) {
-    console.error('[reportes] remitoPdf error', e);
+    logger.error({ err: e }, '[reportes] remitoPdf error');
     res.status(500).json({ error: 'No se pudo generar el PDF' });
   }
 }

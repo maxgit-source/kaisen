@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(npm install:*)",
+      "Bash(ls:*)",
+      "Bash(npx husky:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx jest:*)",
+      "Bash(npx vitest:*)",
+      "Bash(find /c/Users/User/OneDrive/Desktop/kaisen/frontend-react/src/pages/finanzas -type f -name \"*.tsx\" 2>/dev/null | head -20)",
+      "Bash(find /c/Users/User/OneDrive/Desktop/kaisen/frontend-react/src/pages/clientes -type f -name \"*.tsx\" 2>/dev/null | head -20)",
+      "Bash(sed 's/:.*//g')",
+      "Bash(sed 's/^[[:space:]]*//g')",
+      "Bash(grep \"^  [a-zA-Z]\" /c/Users/User/OneDrive/Desktop/kaisen/frontend-react/src/lib/api.ts | grep \":\" | sed 's/:.*//g' | sed 's/^[[:space:]]*//g' | sort -u)",
+      "Bash(cd \"C:\\\\Users\\\\User\\\\OneDrive\\\\Desktop\\\\kaisen\\\\backend\\\\server\" && node -e \"require\\('./services/chatService'\\)\" 2>&1)"
+    ]
+  }
+}

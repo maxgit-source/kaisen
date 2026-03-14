@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Api } from '../lib/api';
 import { usePriceLabels } from '../lib/priceLabels';
 import { uploadImageToCloudinary } from '../lib/cloudinary';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
+import VirtualizedTable from '../components/VirtualizedTable';
 import CategoryTreePicker from '../components/CategoryTreePicker';
 import {
   type CategoryNode,
@@ -32,6 +34,7 @@ type Producto = {
   price_local?: number | null;
   price_distribuidor?: number | null;
   precio_final?: number | null;
+  deleted_at?: string | null;
 };
 
 type HistorialRow = {
@@ -95,6 +98,7 @@ function buildEmptyForm(tipoCambio: string) {
 }
 
 export default function Productos() {
+  const navigate = useNavigate();
   const { labels: priceLabels } = usePriceLabels();
   const [productos, setProductos] = useState<Producto[]>([]);
   const [categoryTree, setCategoryTree] = useState<CategoryNode[]>([]);
@@ -102,6 +106,7 @@ export default function Productos() {
   const [includeDescendants, setIncludeDescendants] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletedProductos, setDeletedProductos] = useState<Producto[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [search, setSearch] = useState('');
@@ -203,7 +208,7 @@ export default function Productos() {
     setError(null);
     try {
       const q = search.trim() || undefined;
-      const [prodsResponse, configDolar] = await Promise.all([
+      const [prodsResponse, configDolar, deletedRows] = await Promise.all([
         Api.productos({
           q,
           page: targetPage,
@@ -212,10 +217,12 @@ export default function Productos() {
           include_descendants: categoryFilterId ? includeDescendants : undefined,
         }),
         Api.getDolarBlue().catch(() => null),
+        Api.productosPapelera({ limit: 20 }).catch(() => []),
       ]);
       const resp: any = prodsResponse || {};
       const data = (resp.data || resp) as Producto[];
       setProductos(data);
+      setDeletedProductos(Array.isArray(deletedRows) ? (deletedRows as Producto[]) : []);
       if (configDolar && typeof (configDolar as any).valor === 'number') {
         setDolarBlue((configDolar as any).valor);
       }
@@ -929,6 +936,12 @@ export default function Productos() {
                       >
                         Historial
                       </button>
+                      <button
+                        className="px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 text-xs"
+                        onClick={() => navigate(`/app/integraciones?syncProductId=${p.id}`)}
+                      >
+                        Publicar en ML
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -963,6 +976,68 @@ export default function Productos() {
           >
             Siguiente
           </button>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-slate-100">Papelera de productos</div>
+              <div className="text-xs text-slate-400">
+                Los productos eliminados quedan aca para poder restaurarlos sin perder historial.
+              </div>
+            </div>
+            <div className="text-xs text-slate-400">
+              {deletedProductos.length} elemento{deletedProductos.length === 1 ? '' : 's'}
+            </div>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="text-left text-slate-400">
+                <tr>
+                  <th className="py-2">Nombre</th>
+                  <th className="py-2">Codigo</th>
+                  <th className="py-2">Categoria</th>
+                  <th className="py-2">Eliminado</th>
+                  <th className="py-2">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="text-slate-200">
+                {deletedProductos.map((producto) => (
+                  <tr key={producto.id} className="border-t border-white/10 hover:bg-white/5">
+                    <td className="py-2">{producto.name}</td>
+                    <td className="py-2">{producto.codigo || '-'}</td>
+                    <td className="py-2">{getCategoryLabel(producto)}</td>
+                    <td className="py-2">
+                      {producto.deleted_at ? new Date(producto.deleted_at).toLocaleString() : '-'}
+                    </td>
+                    <td className="py-2">
+                      <button
+                        type="button"
+                        className="rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200 transition hover:bg-emerald-500/20"
+                        onClick={async () => {
+                          try {
+                            await Api.restaurarProducto(producto.id);
+                            await load(currentPage);
+                          } catch (requestError: any) {
+                            setError(requestError?.message || 'No se pudo restaurar el producto');
+                          }
+                        }}
+                      >
+                        Restaurar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!deletedProductos.length && (
+                  <tr>
+                    <td className="py-4 text-slate-400" colSpan={5}>
+                      No hay productos en papelera.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {historialProducto && (

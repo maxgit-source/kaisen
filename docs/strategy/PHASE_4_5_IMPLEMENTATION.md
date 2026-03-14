@@ -45,7 +45,9 @@ Este modulo agrega capacidades ejecutables para acelerar valor diario de dueno/g
 - `POST /api/duenio/release-train/ciclos/:id/cerrar`
 
 ## Tablas nuevas
-Migracion: `backend/database/migrations_sqlite/V13__owner_intelligence_and_growth.sql`
+Migraciones:
+- `backend/database/migrations_mysql/V12__owner_intelligence_and_growth.sql`
+- `backend/database/migrations_sqlite/V13__owner_intelligence_and_growth.sql`
 
 - cobranzas: `cobranza_promesas`, `cobranza_recordatorios`, `cobranza_riesgo_snapshots`
 - pricing: `repricing_rules`, `price_lists`, `price_list_rules`
@@ -56,3 +58,19 @@ Migracion: `backend/database/migrations_sqlite/V13__owner_intelligence_and_growt
 
 ## Frontend API
 Se agregaron helpers en `frontend-react/src/lib/api.ts` bajo prefijo `owner*` para consumir el modulo completo.
+
+## Cierre UX senior aplicado
+
+### Finanzas
+- `frontend-react/src/pages/Finanzas.tsx`
+  - Tutorial escrito y amigable para cliente final:
+    - Guia rapida contextual por pestana activa (`que mide`, `como leerlo`, `accion recomendada`).
+    - Tutorial completo expandible con lectura accionable para todas las metricas.
+
+### Catalogo PDF
+- `backend/server/services/catalogPdfService.js`
+  - Modo ofertas con imagen principal de oferta en el bloque header:
+    - Prioriza `packaging_image_url` de la oferta.
+    - Si falta, usa primera imagen de producto disponible.
+- `frontend-react/src/pages/CatalogoAdmin.tsx`
+  - Vista previa embebida del PDF antes de descarga (modo precios/ofertas).

@@ -5,9 +5,16 @@ const authMiddleware = require('../middlewares/authmiddleware.js');
 const { requireRole } = require('../middlewares/roleMiddleware');
 const { requireApproval, productPriceChangeEvaluator } = require('../middlewares/approvalMiddleware');
 const { uploadSingle } = require('../middlewares/uploadMiddleware');
+const { uploadLimiter } = require('../middlewares/security');
 
 // Obtener productos (no requiere autenticación para GET)
 router.get('/productos', productController.getProducts);
+router.get(
+  '/productos/papelera',
+  authMiddleware,
+  requireRole(['admin', 'gerente']),
+  productController.listDeletedProducts
+);
 router.get(
   '/productos/codigo/:codigo',
   authMiddleware,
@@ -27,6 +34,7 @@ router.post('/productos', authMiddleware, requireRole(['admin', 'gerente']), pro
 // Importar productos desde Excel/CSV
 router.post(
   '/productos/import',
+  uploadLimiter,
   authMiddleware,
   requireRole(['admin', 'gerente']),
   uploadSingle('file'),
@@ -44,5 +52,11 @@ router.put(
 
 // Eliminar producto (requiere autenticación + rol admin)
 router.delete('/productos/:id', authMiddleware, requireRole(['admin']), productController.deleteProduct);
+router.put(
+  '/productos/:id/restaurar',
+  authMiddleware,
+  requireRole(['admin', 'gerente']),
+  productController.restoreProduct
+);
 
 module.exports = router;

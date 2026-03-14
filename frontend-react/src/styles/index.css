@@ -209,6 +209,26 @@ select option {
   padding-bottom: calc(env(safe-area-inset-bottom) + 0.35rem);
 }
 
+body[data-view-mode='simple'] .app-root {
+  font-size: 1.04rem;
+}
+
+body[data-view-mode='simple'] .app-card,
+body[data-view-mode='simple'] .app-panel {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+body[data-view-mode='simple'] .input-modern,
+body[data-view-mode='simple'] .select-modern {
+  min-height: 3rem;
+}
+
+body[data-view-mode='simple'] .app-root button,
+body[data-view-mode='simple'] .app-root input,
+body[data-view-mode='simple'] .app-root select {
+  font-size: 1rem;
+}
+
 .touch-target {
   min-height: var(--touch-target-min);
   min-width: var(--touch-target-min);
@@ -238,6 +258,36 @@ select option {
   .input-modern,
   .select-modern {
     height: 2.85rem;
+  }
+}
+
+.caja-ticket-print {
+  display: none;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .caja-ticket-print,
+  .caja-ticket-print * {
+    visibility: visible;
+  }
+
+  .caja-ticket-print {
+    display: block;
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    padding: 24px;
+    background: #fff;
+    color: #111;
   }
 }
 

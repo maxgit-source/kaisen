@@ -2,14 +2,16 @@ import { NavLink } from 'react-router-dom';
 import { useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLicense } from '../context/LicenseContext';
+import { useViewMode } from '../context/ViewModeContext';
 import { getRoleFromToken } from '../lib/auth';
 import { getBottomNavItems } from './navigationConfig';
 
 export default function MobileBottomNav() {
   const { accessToken } = useAuth();
   const { status } = useLicense();
+  const { viewMode } = useViewMode();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
-  const items = useMemo(() => getBottomNavItems(role, status), [role, status]);
+  const items = useMemo(() => getBottomNavItems(role, status, viewMode), [role, status, viewMode]);
 
   if (!items.length) return null;
 

@@ -4,6 +4,32 @@ function sumSplitTotal(metodos) {
   return (metodos || []).reduce((acc, item) => acc + Number(item?.monto || 0), 0);
 }
 
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function toMysqlDatetimeUTC(date) {
+  return (
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())} ` +
+    `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`
+  );
+}
+
+function normalizeDbDatetime(value, { allowNull = false } = {}) {
+  if (value == null || value === '') {
+    return allowNull ? null : toMysqlDatetimeUTC(new Date());
+  }
+
+  const candidate = value instanceof Date ? value : new Date(String(value).trim());
+  if (Number.isNaN(candidate.getTime())) {
+    const error = new Error(allowNull ? 'fecha_limite invalida' : 'fecha invalida');
+    error.status = 400;
+    throw error;
+  }
+
+  return toMysqlDatetimeUTC(candidate);
+}
+
 async function validarMetodosPago(client, metodos) {
   const ids = [...new Set(metodos.map((m) => Number(m.metodo_id)).filter((n) => Number.isInteger(n) && n > 0))];
   if (!ids.length) {
@@ -42,6 +68,8 @@ async function crearPago({
   metodos = null,
 }) {
   return withTransaction(async (client) => {
+    const fechaNormalizada = normalizeDbDatetime(fecha);
+    const fechaLimiteNormalizada = normalizeDbDatetime(fecha_limite, { allowNull: true });
     const splitItems = Array.isArray(metodos) ? metodos.filter(Boolean) : [];
     const hasSplit = splitItems.length > 0;
     const totalSplit = hasSplit ? sumSplitTotal(splitItems) : 0;
@@ -111,7 +139,14 @@ async function crearPago({
       const insertRes = await client.query(
         `INSERT INTO pagos(venta_id, cliente_id, monto, fecha, metodo, fecha_limite)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [ventaId, cliente_id, totalMonto, fecha || new Date(), hasSplit ? metodoLegacy : metodo, fecha_limite || null]
+        [
+          ventaId,
+          cliente_id,
+          totalMonto,
+          fechaNormalizada,
+          hasSplit ? metodoLegacy : metodo,
+          fechaLimiteNormalizada,
+        ]
       );
       const pagoId = insertRes.lastID;
       if (hasSplit && pagoId) {
@@ -134,13 +169,19 @@ async function crearPago({
       if (totalPagado >= Number(venta.neto)) {
         await client.query("UPDATE ventas SET estado_pago = 'pagada' WHERE id = $1", [ventaId]);
       }
-      return { venta_id: ventaId, total_pagado: totalPagado };
+      return { venta_id: ventaId, pago_id: pagoId || null, total_pagado: totalPagado };
     }
 
     const insertRes = await client.query(
       `INSERT INTO pagos(venta_id, cliente_id, monto, fecha, metodo, fecha_limite)
        VALUES (NULL, $1, $2, $3, $4, $5)`,
-      [cliente_id, totalMonto, fecha || new Date(), hasSplit ? metodoLegacy : metodo, fecha_limite || null]
+      [
+        cliente_id,
+        totalMonto,
+        fechaNormalizada,
+        hasSplit ? metodoLegacy : metodo,
+        fechaLimiteNormalizada,
+      ]
     );
     const pagoId = insertRes.lastID;
     if (hasSplit && pagoId) {
@@ -157,7 +198,7 @@ async function crearPago({
         );
       }
     }
-    return { venta_id: null, cliente_id, monto: totalMonto };
+    return { venta_id: null, pago_id: pagoId || null, cliente_id, monto: totalMonto };
   });
 }
 
@@ -248,4 +289,12 @@ async function eliminarPago(id) {
   });
 }
 
-module.exports = { crearPago, listarPagos, findById, eliminarPago };
+module.exports = {
+  crearPago,
+  listarPagos,
+  findById,
+  eliminarPago,
+  __test__: {
+    normalizeDbDatetime,
+  },
+};

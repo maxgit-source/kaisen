@@ -1,45 +1,66 @@
 const jwt = require('jsonwebtoken');
+const logger = require('../lib/logger');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { check, validationResult } = require('express-validator');
-const { sendSMSNotification, failedLoginAttempts, FAILED_LOGIN_THRESHOLD } = require('../middlewares/security.js');
-const { SECRET, REFRESH_SECRET, addTokenToBlacklist } = require('../middlewares/authmiddleware.js');
+const { z } = require('zod');
+const {
+  sendSMSNotification,
+  failedLoginAttempts,
+  FAILED_LOGIN_THRESHOLD,
+} = require('../middlewares/security.js');
+const {
+  SECRET,
+  REFRESH_SECRET,
+  addTokenToBlacklist,
+} = require('../middlewares/authmiddleware.js');
 const { sendVerificationEmail } = require('../utils/mailer');
+const {
+  createOtpTransaction,
+  getOtpTransaction,
+  saveOtpTransaction,
+  deleteOtpTransaction,
+} = require('../services/otpStore');
+const {
+  createSetupChallenge,
+  confirmSetup,
+  verifyTotpToken,
+  consumeBackupCode,
+  parseBackupCodeRows,
+} = require('../services/mfaService');
 const users = require('../db/repositories/userRepository');
 const tokens = require('../db/repositories/tokenRepository');
 
 const JWT_ALG = process.env.JWT_ALG || 'HS256';
 const JWT_ISSUER = process.env.JWT_ISSUER;
 const JWT_AUDIENCE = process.env.JWT_AUDIENCE;
-
-function newJti() {
-  return crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
-}
-
-// OTP store (in-memory)
-const otpStore = new Map();
-const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_MAX_ATTEMPTS = 5;
 
-function generateOtpCode() {
-  const num = crypto.randomInt(0, 1000000);
-  return num.toString().padStart(6, '0');
-}
+const loginSchema = z.object({
+  email: z.string().trim().email('Email invalido'),
+  password: z.string().min(6, 'Contrasena invalida'),
+  totp_code: z.string().trim().min(6).max(8).optional(),
+  backup_code: z.string().trim().min(4).max(32).optional(),
+});
 
-function newTransaction(email, userId, role) {
-  const txId = crypto.randomBytes(16).toString('hex');
-  const code = generateOtpCode();
-  const expiresAt = Date.now() + OTP_TTL_MS;
-  otpStore.set(txId, { email, userId, role: role || null, code, expiresAt, attempts: 0 });
-  return { txId, code, expiresAt };
-}
+const otpStep2Schema = z.object({
+  txId: z.string().trim().min(1),
+  code: z.string().trim().min(4).max(12),
+});
 
-// Validation
-const validateLogin = [
-  check('email').isEmail().normalizeEmail(),
-  // No sanitizar password para no alterar credenciales validas.
-  check('password').isString().isLength({ min: 6 }),
-];
+const mfaConfirmSchema = z.object({
+  code: z.string().trim().min(6).max(8),
+});
+
+const mfaDisableSchema = z.object({
+  totp_code: z.string().trim().min(6).max(8).optional(),
+  backup_code: z.string().trim().min(4).max(32).optional(),
+});
+
+function newJti() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+}
 
 function buildSignOpts(ttl) {
   const opts = { algorithm: JWT_ALG, expiresIn: ttl };
@@ -48,107 +69,250 @@ function buildSignOpts(ttl) {
   return opts;
 }
 
+function toValidationErrors(error) {
+  return error.issues.map((issue) => ({
+    param: issue.path.join('.') || 'body',
+    msg: issue.message,
+  }));
+}
+
+function parseOrReply(schema, payload, res) {
+  const parsed = schema.safeParse(payload || {});
+  if (parsed.success) return parsed.data;
+  res.status(400).json({
+    error: 'Datos invalidos',
+    code: 'VALIDATION_ERROR',
+    errors: toValidationErrors(parsed.error),
+  });
+  return null;
+}
+
 async function issueTokens(user, meta = {}) {
   if (!SECRET || !REFRESH_SECRET) {
     throw new Error('Server JWT secrets not configured');
   }
+
   const payload = { sub: user.id, email: user.email, role: user.rol };
   const accessJti = newJti();
-  const accessToken = jwt.sign(payload, SECRET, { ...buildSignOpts('15m'), jwtid: accessJti });
+  const accessToken = jwt.sign(payload, SECRET, {
+    ...buildSignOpts('15m'),
+    jwtid: accessJti,
+  });
 
   const refreshJti = newJti();
-  const refreshToken = jwt.sign({ sub: user.id, email: user.email }, REFRESH_SECRET, { ...buildSignOpts('7d'), jwtid: refreshJti });
-  // Persist refresh token (expiry from now + 7d)
+  const refreshToken = jwt.sign(
+    { sub: user.id, email: user.email },
+    REFRESH_SECRET,
+    { ...buildSignOpts('7d'), jwtid: refreshJti }
+  );
+
   const expMs = 7 * 24 * 60 * 60 * 1000;
-  const expiresAt = new Date(Date.now() + expMs);
   await tokens.saveRefreshToken({
     user_id: user.id,
     token: refreshToken,
     jti: refreshJti,
     user_agent: meta.user_agent || null,
     ip: meta.ip || null,
-    expires_at: expiresAt,
+    expires_at: new Date(Date.now() + expMs),
   });
+
   return { accessToken, refreshToken };
 }
 
-async function login(req, res) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+async function validateMfaIfNeeded(user, payload) {
+  const isEnabled = Number(user?.totp_enabled || 0) === 1 && Boolean(user?.totp_secret);
+  if (!isEnabled) return { ok: true };
 
-  const { email, password } = req.body;
+  if (payload.backup_code) {
+    const consumed = consumeBackupCode({
+      storedCodes: user.totp_backup_codes,
+      code: payload.backup_code,
+    });
+    if (!consumed.matched) {
+      return {
+        ok: false,
+        status: 401,
+        body: {
+          error: 'Codigo de respaldo invalido',
+          code: 'MFA_INVALID_BACKUP_CODE',
+          mfa_required: true,
+        },
+      };
+    }
+    await users.update(user.id, {
+      totp_backup_codes: JSON.stringify(consumed.nextRows),
+    });
+    return { ok: true, usedBackupCode: true };
+  }
+
+  if (!payload.totp_code) {
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        error: 'Se requiere el codigo de autenticacion de la app.',
+        code: 'MFA_REQUIRED',
+        mfa_required: true,
+      },
+    };
+  }
+
+  const valid = verifyTotpToken({
+    encryptedSecret: user.totp_secret,
+    token: payload.totp_code,
+  });
+  if (!valid) {
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        error: 'Codigo de autenticacion invalido',
+        code: 'MFA_INVALID_CODE',
+        mfa_required: true,
+      },
+    };
+  }
+
+  return { ok: true };
+}
+
+async function login(req, res) {
+  const payload = parseOrReply(loginSchema, req.body, res);
+  if (!payload) return;
+
   const clientIp = req.ip;
   if (!failedLoginAttempts.has(clientIp)) failedLoginAttempts.set(clientIp, 0);
 
   try {
-    const user = await users.findByEmail((email || '').trim().toLowerCase());
+    const user = await users.findByEmail(payload.email);
     if (!user || user.activo === false) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
-      return res.status(401).json({ error: 'Usuario no autorizado' });
+      return res.status(401).json({
+        error: 'Usuario no autorizado',
+        code: 'AUTH_INVALID_CREDENTIALS',
+      });
     }
-    const match = await bcrypt.compare(password, user.password_hash);
+
+    const match = await bcrypt.compare(payload.password, user.password_hash);
     if (!match) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
       if (failedLoginAttempts.get(clientIp) >= FAILED_LOGIN_THRESHOLD) {
-        sendSMSNotification(`Alerta: múltiples intentos fallidos desde IP ${clientIp} para ${user.email}`);
+        sendSMSNotification(
+          `Alerta: multiples intentos fallidos desde IP ${clientIp} para ${user.email}`
+        ).catch(() => {});
       }
-      return res.status(401).json({ error: 'Contraseña incorrecta' });
+      return res.status(401).json({
+        error: 'Contrasena incorrecta',
+        code: 'AUTH_INVALID_CREDENTIALS',
+      });
     }
+
+    const mfaResult = await validateMfaIfNeeded(user, payload);
+    if (!mfaResult.ok) {
+      return res.status(mfaResult.status).json(mfaResult.body);
+    }
+
     failedLoginAttempts.delete(clientIp);
-    const t = await issueTokens(user, { user_agent: req.get('User-Agent'), ip: req.ip });
-    res.json(t);
-  } catch (e) {
-    console.error('Login error:', e.message);
-    res.status(500).json({ error: 'Error de autenticación' });
+    const issued = await issueTokens(user, {
+      user_agent: req.get('User-Agent'),
+      ip: req.ip,
+    });
+    return res.json(issued);
+  } catch (err) {
+    logger.error({ err: err?.message || err }, 'Login error:');
+    return res.status(500).json({ error: 'Error de autenticacion', code: 'AUTH_INTERNAL_ERROR' });
   }
 }
 
 async function loginStep1(req, res) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-  const { email, password } = req.body;
+  const payload = parseOrReply(loginSchema.pick({ email: true, password: true }), req.body, res);
+  if (!payload) return;
+
   const clientIp = req.ip;
   if (!failedLoginAttempts.has(clientIp)) failedLoginAttempts.set(clientIp, 0);
+
   try {
-    const user = await users.findByEmail((email || '').trim().toLowerCase());
+    const user = await users.findByEmail(payload.email);
     if (!user || user.activo === false) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
-      if (failedLoginAttempts.get(clientIp) >= FAILED_LOGIN_THRESHOLD) sendSMSNotification(`Alerta: IP ${clientIp} email no autorizado`);
-      return res.status(401).json({ error: 'Usuario no autorizado' });
+      if (failedLoginAttempts.get(clientIp) >= FAILED_LOGIN_THRESHOLD) {
+        sendSMSNotification(`Alerta: IP ${clientIp} email no autorizado`).catch(() => {});
+      }
+      return res.status(401).json({ error: 'Usuario no autorizado', code: 'AUTH_INVALID_CREDENTIALS' });
     }
-    const match = await bcrypt.compare(password, user.password_hash);
+
+    const match = await bcrypt.compare(payload.password, user.password_hash);
     if (!match) {
       failedLoginAttempts.set(clientIp, failedLoginAttempts.get(clientIp) + 1);
-      if (failedLoginAttempts.get(clientIp) >= FAILED_LOGIN_THRESHOLD) sendSMSNotification(`Alerta: IP ${clientIp} password incorrecta`);
-      return res.status(401).json({ error: 'Contraseña incorrecta' });
+      if (failedLoginAttempts.get(clientIp) >= FAILED_LOGIN_THRESHOLD) {
+        sendSMSNotification(`Alerta: IP ${clientIp} password incorrecta`).catch(() => {});
+      }
+      return res.status(401).json({ error: 'Contrasena incorrecta', code: 'AUTH_INVALID_CREDENTIALS' });
     }
+
     failedLoginAttempts.delete(clientIp);
-    const { txId, code } = newTransaction(user.email, user.id, user.rol);
-    try { await sendVerificationEmail(user.email, code); } catch (e) { console.error('OTP email error:', e.message); return res.status(500).json({ error: 'No se pudo enviar el código' }); }
+    const { txId, code } = await createOtpTransaction({
+      email: user.email,
+      userId: user.id,
+      role: user.rol,
+    });
+
+    try {
+      await sendVerificationEmail(user.email, code);
+    } catch (err) {
+      logger.error({ err: err?.message || err }, 'OTP email error:');
+      return res.status(500).json({ error: 'No se pudo enviar el codigo', code: 'OTP_SEND_FAILED' });
+    }
+
     return res.json({ otpSent: true, txId });
-  } catch (e) {
-    console.error('Login step1 error:', e.message);
-    res.status(500).json({ error: 'Error de autenticación' });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, 'Login step1 error:');
+    return res.status(500).json({ error: 'Error de autenticacion', code: 'AUTH_INTERNAL_ERROR' });
   }
 }
 
-function loginStep2(req, res) {
-  const { txId, code } = req.body || {};
-  if (!txId || !code) return res.status(400).json({ error: 'txId y código requeridos' });
-  const rec = otpStore.get(txId);
-  if (!rec) return res.status(400).json({ error: 'Transacción no encontrada o expirada' });
-  if (Date.now() > rec.expiresAt) { otpStore.delete(txId); return res.status(400).json({ error: 'Código expirado' }); }
-  if (rec.attempts >= OTP_MAX_ATTEMPTS) { otpStore.delete(txId); return res.status(429).json({ error: 'Demasiados intentos' }); }
-  rec.attempts += 1;
-  if (String(code).trim() !== rec.code) return res.status(401).json({ error: 'Código incorrecto' });
+async function loginStep2(req, res) {
+  const payload = parseOrReply(otpStep2Schema, req.body, res);
+  if (!payload) return;
 
-  otpStore.delete(txId);
-  if (!SECRET || !REFRESH_SECRET) return res.status(500).json({ error: 'Server JWT no configurado' });
-  const payload = { sub: rec.userId, email: rec.email, role: rec.role || null };
-  const accessToken = jwt.sign(payload, SECRET, { ...buildSignOpts('15m'), jwtid: newJti() });
+  const rec = await getOtpTransaction(payload.txId);
+  if (!rec) {
+    return res.status(400).json({ error: 'Transaccion no encontrada o expirada', code: 'OTP_NOT_FOUND' });
+  }
+
+  if (Date.now() > rec.expiresAt) {
+    await deleteOtpTransaction(payload.txId);
+    return res.status(400).json({ error: 'Codigo expirado', code: 'OTP_EXPIRED' });
+  }
+
+  if (rec.attempts >= OTP_MAX_ATTEMPTS) {
+    await deleteOtpTransaction(payload.txId);
+    return res.status(429).json({ error: 'Demasiados intentos', code: 'OTP_RATE_LIMITED' });
+  }
+
+  rec.attempts += 1;
+  if (String(payload.code).trim() !== rec.code) {
+    await saveOtpTransaction(payload.txId, rec);
+    return res.status(401).json({ error: 'Codigo incorrecto', code: 'OTP_INVALID' });
+  }
+
+  await deleteOtpTransaction(payload.txId);
+
+  if (!SECRET || !REFRESH_SECRET) {
+    return res.status(500).json({ error: 'Server JWT no configurado', code: 'JWT_NOT_CONFIGURED' });
+  }
+
+  const payloadJwt = { sub: rec.userId, email: rec.email, role: rec.role || null };
+  const accessToken = jwt.sign(payloadJwt, SECRET, {
+    ...buildSignOpts('15m'),
+    jwtid: newJti(),
+  });
   const refreshJti = newJti();
-  const refreshToken = jwt.sign(payload, REFRESH_SECRET, { ...buildSignOpts('7d'), jwtid: refreshJti });
-  const expMs = 7 * 24 * 60 * 60 * 1000;
+  const refreshToken = jwt.sign(payloadJwt, REFRESH_SECRET, {
+    ...buildSignOpts('7d'),
+    jwtid: refreshJti,
+  });
+
   tokens
     .saveRefreshToken({
       user_id: rec.userId,
@@ -156,48 +320,161 @@ function loginStep2(req, res) {
       jti: refreshJti,
       user_agent: req.get('User-Agent'),
       ip: req.ip,
-      expires_at: new Date(Date.now() + expMs),
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     })
     .catch(() => {});
+
   return res.json({ accessToken, refreshToken });
 }
 
 async function refreshToken(req, res) {
-  const { refreshToken } = req.body;
-  if (!refreshToken) return res.status(401).json({ error: 'Refresh token requerido' });
-  if (!REFRESH_SECRET || !SECRET) return res.status(500).json({ error: 'JWT no configurado' });
+  const refreshTokenValue = req.body?.refreshToken;
+  if (!refreshTokenValue) {
+    return res.status(401).json({ error: 'Refresh token requerido', code: 'REFRESH_REQUIRED' });
+  }
+  if (!REFRESH_SECRET || !SECRET) {
+    return res.status(500).json({ error: 'JWT no configurado', code: 'JWT_NOT_CONFIGURED' });
+  }
+
   try {
     const verifyOptions = { algorithms: [JWT_ALG] };
     if (JWT_ISSUER) verifyOptions.issuer = JWT_ISSUER;
     if (JWT_AUDIENCE) verifyOptions.audience = JWT_AUDIENCE;
-    const decoded = jwt.verify(refreshToken, REFRESH_SECRET, verifyOptions);
-    const valid = await tokens.isRefreshTokenValid(refreshToken);
-    if (!valid) return res.status(403).json({ error: 'Refresh token inválido o revocado' });
-    // Load user
+
+    const decoded = jwt.verify(refreshTokenValue, REFRESH_SECRET, verifyOptions);
+    const valid = await tokens.isRefreshTokenValid(refreshTokenValue);
+    if (!valid) {
+      return res.status(403).json({ error: 'Refresh token invalido o revocado', code: 'REFRESH_INVALID' });
+    }
+
     const user = await users.findById(decoded.sub);
-    if (!user || user.activo === false) return res.status(403).json({ error: 'Usuario inactivo o no encontrado' });
-    const accessToken = jwt.sign({ sub: user.id, email: user.email, role: user.rol }, SECRET, { ...buildSignOpts('15m'), jwtid: newJti() });
-    res.json({ accessToken });
+    if (!user || user.activo === false) {
+      return res.status(403).json({ error: 'Usuario inactivo o no encontrado', code: 'USER_NOT_FOUND' });
+    }
+
+    const accessToken = jwt.sign(
+      { sub: user.id, email: user.email, role: user.rol },
+      SECRET,
+      { ...buildSignOpts('15m'), jwtid: newJti() }
+    );
+    return res.json({ accessToken });
   } catch (err) {
-    console.error('Refresh token error:', err.message);
-    return res.status(403).json({ error: 'Refresh token inválido o expirado' });
+    logger.error({ err: err?.message || err }, 'Refresh token error:');
+    return res.status(403).json({ error: 'Refresh token invalido o expirado', code: 'REFRESH_INVALID' });
   }
 }
 
 async function logout(req, res) {
   const accessToken = req.token;
   if (accessToken) addTokenToBlacklist(accessToken);
-  const { refreshToken } = req.body || {};
-  if (refreshToken) {
-    try { await tokens.revokeRefreshToken(refreshToken); } catch (_) {}
+
+  const refreshTokenValue = req.body?.refreshToken;
+  if (refreshTokenValue) {
+    try {
+      await tokens.revokeRefreshToken(refreshTokenValue);
+    } catch (_) {}
   }
-  return res.status(200).json({ message: 'Sesión cerrada exitosamente.' });
+
+  return res.status(200).json({ message: 'Sesion cerrada exitosamente.' });
+}
+
+async function mfaStatus(req, res) {
+  const userId = Number(req.user?.sub || 0);
+  if (!userId) return res.status(401).json({ error: 'Sesion invalida', code: 'SESSION_EXPIRED' });
+
+  const user = await users.findByIdForSecurity(userId);
+  if (!user) {
+    return res.status(404).json({ error: 'Usuario no encontrado', code: 'USER_NOT_FOUND' });
+  }
+
+  const backupCodes = parseBackupCodeRows(user.totp_backup_codes);
+  const remaining = backupCodes.filter((row) => row && !row.used_at).length;
+  return res.json({
+    enabled: Number(user.totp_enabled || 0) === 1,
+    backup_codes_remaining: remaining,
+  });
+}
+
+async function mfaSetup(req, res) {
+  const userId = Number(req.user?.sub || 0);
+  if (!userId) return res.status(401).json({ error: 'Sesion invalida', code: 'SESSION_EXPIRED' });
+
+  const user = await users.findByIdForSecurity(userId);
+  if (!user) {
+    return res.status(404).json({ error: 'Usuario no encontrado', code: 'USER_NOT_FOUND' });
+  }
+
+  try {
+    const setup = await createSetupChallenge({
+      userId,
+      email: user.email,
+    });
+    return res.json(setup);
+  } catch (error) {
+    return res.status(500).json({ error: 'No se pudo iniciar MFA', code: 'MFA_SETUP_FAILED' });
+  }
+}
+
+async function mfaConfirm(req, res) {
+  const userId = Number(req.user?.sub || 0);
+  if (!userId) return res.status(401).json({ error: 'Sesion invalida', code: 'SESSION_EXPIRED' });
+  const payload = parseOrReply(mfaConfirmSchema, req.body, res);
+  if (!payload) return;
+
+  try {
+    const result = await confirmSetup({
+      userId,
+      code: payload.code,
+    });
+    await users.update(userId, {
+      totp_secret: result.encryptedSecret,
+      totp_enabled: 1,
+      totp_backup_codes: JSON.stringify(result.backupCodeRows),
+    });
+    return res.json({
+      message: 'MFA activado correctamente',
+      backup_codes: result.backupCodes,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      error: error.message || 'No se pudo activar MFA',
+      code: error.code || 'MFA_CONFIRM_FAILED',
+    });
+  }
+}
+
+async function mfaDisable(req, res) {
+  const userId = Number(req.user?.sub || 0);
+  if (!userId) return res.status(401).json({ error: 'Sesion invalida', code: 'SESSION_EXPIRED' });
+  const payload = parseOrReply(mfaDisableSchema, req.body, res);
+  if (!payload) return;
+
+  const user = await users.findByIdForSecurity(userId);
+  if (!user || Number(user.totp_enabled || 0) !== 1 || !user.totp_secret) {
+    return res.status(400).json({ error: 'MFA no esta habilitado', code: 'MFA_NOT_ENABLED' });
+  }
+
+  const verified = await validateMfaIfNeeded(user, payload);
+  if (!verified.ok) {
+    return res.status(verified.status).json(verified.body);
+  }
+
+  await users.update(userId, {
+    totp_secret: null,
+    totp_enabled: 0,
+    totp_backup_codes: null,
+  });
+  return res.json({ message: 'MFA deshabilitado' });
 }
 
 module.exports = {
-  login: [...validateLogin, login],
-  loginStep1: [...validateLogin, loginStep1],
+  login,
+  loginStep1,
   loginStep2,
   refreshToken,
   logout,
+  mfaStatus,
+  mfaSetup,
+  mfaConfirm,
+  mfaDisable,
 };

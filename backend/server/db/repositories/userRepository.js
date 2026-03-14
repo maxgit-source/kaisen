@@ -2,12 +2,22 @@ const { query } = require('../../db/pg');
 
 async function findByEmail(email) {
   const { rows } = await query(
-    `SELECT u.id, u.nombre, u.email, u.password_hash, u.rol_id, u.activo,
+    `SELECT u.id,
+            u.nombre,
+            u.email,
+            u.password_hash,
+            u.rol_id,
+            u.activo,
             u.caja_tipo_default,
+            u.deleted_at,
+            u.totp_secret,
+            u.totp_enabled,
+            u.totp_backup_codes,
             r.nombre AS rol
        FROM usuarios u
   LEFT JOIN roles r ON r.id = u.rol_id
       WHERE LOWER(u.email) = LOWER($1)
+        AND u.deleted_at IS NULL
       LIMIT 1`,
     [email]
   );
@@ -16,40 +26,115 @@ async function findByEmail(email) {
 
 async function findById(id) {
   const { rows } = await query(
-    `SELECT u.id, u.nombre, u.email, u.rol_id, u.activo, u.caja_tipo_default, r.nombre AS rol
+    `SELECT u.id,
+            u.nombre,
+            u.email,
+            u.rol_id,
+            u.activo,
+            u.caja_tipo_default,
+            u.deleted_at,
+            u.totp_enabled,
+            r.nombre AS rol
        FROM usuarios u
   LEFT JOIN roles r ON r.id = u.rol_id
-      WHERE u.id = $1`,
+      WHERE u.id = $1
+        AND u.deleted_at IS NULL
+      LIMIT 1`,
     [id]
   );
   return rows[0] || null;
 }
 
-async function list({ q, activo, role, limit = 100, offset = 0 } = {}) {
-  const where = [];
-  const params = [];
-  if (q) { params.push(`%${q.toLowerCase()}%`); where.push(`(LOWER(u.nombre) LIKE $${params.length} OR LOWER(u.email) LIKE $${params.length})`); }
-  if (typeof activo !== 'undefined') { params.push(activo === 'true' ? true : false); where.push(`u.activo = $${params.length}`); }
-  if (role) { params.push(String(role).trim().toLowerCase()); where.push(`LOWER(r.nombre) = $${params.length}`); }
-  const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
-  const off = Math.max(parseInt(offset, 10) || 0, 0);
-  params.push(lim); params.push(off);
+async function findByIdForSecurity(id) {
   const { rows } = await query(
-    `SELECT u.id, u.nombre, u.email, u.activo, u.caja_tipo_default, r.nombre AS rol
+    `SELECT u.id,
+            u.nombre,
+            u.email,
+            u.rol_id,
+            u.activo,
+            u.caja_tipo_default,
+            u.deleted_at,
+            u.totp_secret,
+            u.totp_enabled,
+            u.totp_backup_codes,
+            r.nombre AS rol
        FROM usuarios u
   LEFT JOIN roles r ON r.id = u.rol_id
-      ${where.length? 'WHERE ' + where.join(' AND ') : ''}
+      WHERE u.id = $1
+      LIMIT 1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+async function list({
+  q,
+  activo,
+  role,
+  limit = 100,
+  offset = 0,
+  includeDeleted = false,
+  onlyDeleted = false,
+} = {}) {
+  const where = [];
+  const params = [];
+  if (onlyDeleted) where.push('u.deleted_at IS NOT NULL');
+  else if (!includeDeleted) where.push('u.deleted_at IS NULL');
+  if (q) {
+    params.push(`%${q.toLowerCase()}%`);
+    where.push(`(LOWER(u.nombre) LIKE $${params.length} OR LOWER(u.email) LIKE $${params.length})`);
+  }
+  if (typeof activo !== 'undefined') {
+    params.push(activo === 'true' ? true : false);
+    where.push(`u.activo = $${params.length}`);
+  }
+  if (role) {
+    params.push(String(role).trim().toLowerCase());
+    where.push(`LOWER(r.nombre) = $${params.length}`);
+  }
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
+  const off = Math.max(parseInt(offset, 10) || 0, 0);
+  params.push(lim);
+  params.push(off);
+  const { rows } = await query(
+    `SELECT u.id,
+            u.nombre,
+            u.email,
+            u.activo,
+            u.caja_tipo_default,
+            u.deleted_at,
+            u.totp_enabled,
+            r.nombre AS rol
+       FROM usuarios u
+  LEFT JOIN roles r ON r.id = u.rol_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY u.id DESC
-      LIMIT $${params.length-1} OFFSET $${params.length}`,
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
   return rows;
 }
 
-async function create({ nombre, email, password_hash, rol_id, activo = true, caja_tipo_default = 'sucursal' }) {
+async function create({
+  nombre,
+  email,
+  password_hash,
+  rol_id,
+  activo = true,
+  caja_tipo_default = 'sucursal',
+}) {
   const { rows } = await query(
-    `INSERT INTO usuarios(nombre, email, password_hash, rol_id, activo, caja_tipo_default)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO usuarios(
+       nombre,
+       email,
+       password_hash,
+       rol_id,
+       activo,
+       caja_tipo_default,
+       deleted_at,
+       totp_enabled
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, NULL, 0)
      RETURNING id`,
     [nombre, email, password_hash, rol_id, !!activo, caja_tipo_default || 'sucursal']
   );
@@ -60,7 +145,17 @@ async function update(id, fields) {
   const sets = [];
   const params = [];
   let p = 1;
-  for (const [key, col] of Object.entries({ nombre:'nombre', email:'email', rol_id:'rol_id', activo:'activo', caja_tipo_default:'caja_tipo_default' })) {
+  for (const [key, col] of Object.entries({
+    nombre: 'nombre',
+    email: 'email',
+    rol_id: 'rol_id',
+    activo: 'activo',
+    caja_tipo_default: 'caja_tipo_default',
+    deleted_at: 'deleted_at',
+    totp_secret: 'totp_secret',
+    totp_enabled: 'totp_enabled',
+    totp_backup_codes: 'totp_backup_codes',
+  })) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {
       sets.push(`${col} = $${p++}`);
       params.push(fields[key]);
@@ -68,12 +163,26 @@ async function update(id, fields) {
   }
   if (!sets.length) return { id };
   params.push(id);
-  const { rows } = await query(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${p} RETURNING id`, params);
+  const { rows } = await query(
+    `UPDATE usuarios
+        SET ${sets.join(', ')},
+            actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = $${p}
+      RETURNING id`,
+    params
+  );
   return rows[0] || null;
 }
 
 async function setPasswordHash(id, password_hash) {
-  const { rows } = await query(`UPDATE usuarios SET password_hash = $1 WHERE id = $2 RETURNING id`, [password_hash, id]);
+  const { rows } = await query(
+    `UPDATE usuarios
+        SET password_hash = $1,
+            actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING id`,
+    [password_hash, id]
+  );
   return rows[0] || null;
 }
 
@@ -138,6 +247,7 @@ async function sellerPerformance({ desde, hasta } = {}) {
         JOIN roles r ON r.id = u.rol_id
         LEFT JOIN margen_por_venta mv ON mv.usuario_id = u.id
        WHERE r.nombre = 'vendedor'
+         AND u.deleted_at IS NULL
        GROUP BY u.id, u.nombre, u.email, u.activo, r.nombre
        ORDER BY total_ventas DESC`,
     params
@@ -152,6 +262,7 @@ async function hasAdmin() {
        JOIN roles r ON r.id = u.rol_id
       WHERE r.nombre = 'admin'
         AND u.activo = 1
+        AND u.deleted_at IS NULL
       LIMIT 1`
   );
   return rows.length > 0;
@@ -159,21 +270,47 @@ async function hasAdmin() {
 
 async function countActive(excludeId = null) {
   const params = [];
-  let where = 'WHERE activo = 1';
+  let where = 'WHERE activo = 1 AND deleted_at IS NULL';
   if (excludeId) {
     params.push(excludeId);
     where += ` AND id <> $${params.length}`;
   }
-  const { rows } = await query(
-    `SELECT COUNT(*) AS total FROM usuarios ${where}`,
-    params
-  );
+  const { rows } = await query(`SELECT COUNT(*) AS total FROM usuarios ${where}`, params);
   return Number(rows?.[0]?.total || 0);
+}
+
+async function softDelete(id) {
+  const { rows } = await query(
+    `UPDATE usuarios
+        SET activo = 0,
+            deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
+            actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = $1
+        AND deleted_at IS NULL
+      RETURNING id`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+async function restore(id) {
+  const { rows } = await query(
+    `UPDATE usuarios
+        SET activo = 1,
+            deleted_at = NULL,
+            actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = $1
+        AND deleted_at IS NOT NULL
+      RETURNING id`,
+    [id]
+  );
+  return rows[0] || null;
 }
 
 module.exports = {
   findByEmail,
   findById,
+  findByIdForSecurity,
   list,
   create,
   update,
@@ -183,4 +320,6 @@ module.exports = {
   sellerPerformance,
   hasAdmin,
   countActive,
+  softDelete,
+  restore,
 };

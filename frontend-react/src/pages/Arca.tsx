@@ -26,6 +26,10 @@ type ArcaConfig = {
   has_certificado?: boolean;
   has_clave_privada?: boolean;
   certificado_vto?: string | null;
+  certificado_nombre_archivo?: string | null;
+  p12_subido_en?: string | null;
+  default_tipo_comprobante?: 'A' | 'B' | 'C' | null;
+  alicuotas_iva?: number[];
 };
 
 type PuntoVenta = {
@@ -53,6 +57,12 @@ async function readFileText(file: File): Promise<string> {
   });
 }
 
+function parseAliquotas(values: string[]) {
+  return values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+}
+
 export default function Arca() {
   const [config, setConfig] = useState<ArcaConfig | null>(null);
   const [configForm, setConfigForm] = useState({
@@ -67,6 +77,8 @@ export default function Arca() {
     permitir_sin_entrega: false,
     permitir_sin_pago: false,
     precios_incluyen_iva: true,
+    default_tipo_comprobante: 'B' as 'A' | 'B' | 'C',
+    alicuotas_iva: ['21'],
     certificado_pem: '',
     clave_privada_pem: '',
     passphrase: '',
@@ -74,9 +86,17 @@ export default function Arca() {
   const [configSaving, setConfigSaving] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configSuccess, setConfigSuccess] = useState<string | null>(null);
+  const [p12File, setP12File] = useState<File | null>(null);
+  const [p12Uploading, setP12Uploading] = useState(false);
+  const [p12Error, setP12Error] = useState<string | null>(null);
+  const [p12Success, setP12Success] = useState<string | null>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  const [libroMes, setLibroMes] = useState(new Date().toISOString().slice(0, 7));
+  const [libroLoading, setLibroLoading] = useState(false);
+  const [libroError, setLibroError] = useState<string | null>(null);
+  const [libroResult, setLibroResult] = useState<any | null>(null);
 
   const [puntosVenta, setPuntosVenta] = useState<PuntoVenta[]>([]);
   const [depositos, setDepositos] = useState<DepositoRow[]>([]);
@@ -109,6 +129,10 @@ export default function Arca() {
             precios_incluyen_iva: (cfg as any).precios_incluyen_iva !== undefined
               ? Boolean((cfg as any).precios_incluyen_iva)
               : true,
+            default_tipo_comprobante: (cfg as any).default_tipo_comprobante || 'B',
+            alicuotas_iva: Array.isArray((cfg as any).alicuotas_iva) && (cfg as any).alicuotas_iva.length
+              ? (cfg as any).alicuotas_iva.map((value: number) => String(value))
+              : ['21'],
           }));
         }
         setPuntosVenta(pvs as PuntoVenta[]);
@@ -144,6 +168,8 @@ export default function Arca() {
         permitir_sin_entrega: configForm.permitir_sin_entrega,
         permitir_sin_pago: configForm.permitir_sin_pago,
         precios_incluyen_iva: configForm.precios_incluyen_iva,
+        default_tipo_comprobante: configForm.default_tipo_comprobante,
+        alicuotas_iva: parseAliquotas(configForm.alicuotas_iva),
       };
       if (configForm.certificado_pem.trim()) payload.certificado_pem = configForm.certificado_pem;
       if (configForm.clave_privada_pem.trim()) payload.clave_privada_pem = configForm.clave_privada_pem;
@@ -175,6 +201,66 @@ export default function Arca() {
       setTestError(e?.message || 'No se pudo probar conexión');
     } finally {
       setTestLoading(false);
+    }
+  }
+
+  async function uploadP12() {
+    if (!p12File) {
+      setP12Error('Seleccioná un archivo .p12 o .pfx.');
+      return;
+    }
+    setP12Error(null);
+    setP12Success(null);
+    setP12Uploading(true);
+    try {
+      const saved = await Api.arcaUploadP12(p12File, configForm.passphrase || '');
+      setConfig(saved as ArcaConfig);
+      setP12Success('Certificado importado correctamente desde .p12');
+      setP12File(null);
+    } catch (e: any) {
+      setP12Error(e?.message || 'No se pudo importar el certificado .p12');
+    } finally {
+      setP12Uploading(false);
+    }
+  }
+
+  async function cargarLibroIva() {
+    setLibroError(null);
+    setLibroLoading(true);
+    try {
+      const data = await Api.libroIvaDigital({
+        mes: libroMes,
+        tipo: 'ventas',
+        format: 'json',
+      });
+      setLibroResult(data);
+    } catch (e: any) {
+      setLibroError(e?.message || 'No se pudo consultar el libro IVA');
+      setLibroResult(null);
+    } finally {
+      setLibroLoading(false);
+    }
+  }
+
+  async function descargarLibroIva(format: 'csv' | 'xlsx') {
+    setLibroError(null);
+    setLibroLoading(true);
+    try {
+      const blob = await Api.libroIvaDigital({
+        mes: libroMes,
+        tipo: 'ventas',
+        format,
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `libro-iva-ventas-${libroMes}.${format}`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setLibroError(e?.message || 'No se pudo descargar el libro IVA');
+    } finally {
+      setLibroLoading(false);
     }
   }
 
@@ -332,9 +418,57 @@ export default function Arca() {
                 Precios incluyen IVA
               </label>
             </div>
+            <label className="text-sm">
+              <div className="text-slate-400 mb-1">Tipo de comprobante por defecto</div>
+              <select
+                className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                value={configForm.default_tipo_comprobante}
+                onChange={(e) =>
+                  setConfigForm((prev) => ({
+                    ...prev,
+                    default_tipo_comprobante: e.target.value as 'A' | 'B' | 'C',
+                  }))
+                }
+              >
+                <option value="A">Factura A</option>
+                <option value="B">Factura B</option>
+                <option value="C">Factura C</option>
+              </select>
+            </label>
+            <div className="space-y-2">
+              <div className="text-sm text-slate-400">Alicuotas de IVA habilitadas</div>
+              <div className="flex flex-wrap gap-3 text-sm text-slate-300">
+                {[10.5, 21, 27, 0].map((iva) => {
+                  const label = iva === 0 ? 'Exento' : `${String(iva).replace('.', ',')}%`;
+                  const checked = configForm.alicuotas_iva.includes(String(iva));
+                  return (
+                    <label key={iva} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="rounded border-white/20"
+                        checked={checked}
+                        onChange={(e) => {
+                          setConfigForm((prev) => ({
+                            ...prev,
+                            alicuotas_iva: e.target.checked
+                              ? [...prev.alicuotas_iva, String(iva)]
+                              : prev.alicuotas_iva.filter((item) => item !== String(iva)),
+                          }));
+                        }}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
             <div className="text-xs text-slate-400">
               Certificado cargado: {config?.has_certificado ? 'Sí' : 'No'} · Clave privada: {config?.has_clave_privada ? 'Sí' : 'No'}
               {config?.certificado_vto ? ` (Vto ${config.certificado_vto})` : ''}
+            </div>
+            <div className="text-xs text-slate-400">
+              Archivo .p12: {config?.certificado_nombre_archivo || 'No cargado'}
+              {config?.p12_subido_en ? ` · Subido ${new Date(config.p12_subido_en).toLocaleString('es-AR')}` : ''}
             </div>
             <label className="text-sm">
               <div className="text-slate-400 mb-1">Certificado (.pem/.crt)</div>
@@ -385,6 +519,28 @@ export default function Arca() {
                 onChange={(e) => setConfigForm((prev) => ({ ...prev, passphrase: e.target.value }))}
               />
             </label>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-2">
+              <div className="text-sm font-medium text-slate-100">Importar certificado .p12 / .pfx</div>
+              <div className="text-xs text-slate-400">
+                Extrae certificado y clave privada para usarlos en emisión automática.
+              </div>
+              <input
+                type="file"
+                accept=".p12,.pfx,application/x-pkcs12"
+                className="text-xs text-slate-300"
+                onChange={(e) => setP12File(e.target.files?.[0] || null)}
+              />
+              {p12Error && <div className="text-xs text-rose-300">{p12Error}</div>}
+              {p12Success && <div className="text-xs text-emerald-300">{p12Success}</div>}
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded bg-cyan-500/20 border border-cyan-500/30 hover:bg-cyan-500/30 text-cyan-200 text-sm"
+                onClick={uploadP12}
+                disabled={p12Uploading}
+              >
+                {p12Uploading ? 'Importando...' : 'Subir .p12'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -500,6 +656,123 @@ export default function Arca() {
             </div>
           ))}
           {!depositos.length && <div className="text-slate-400">Sin depósitos disponibles.</div>}
+        </div>
+      </ChartCard>
+
+      <ChartCard title="ARCA - Libro IVA Digital">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[220px_1fr]">
+          <div className="space-y-3">
+            <label className="text-sm">
+              <div className="text-slate-400 mb-1">Mes</div>
+              <input
+                type="month"
+                className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                value={libroMes}
+                onChange={(e) => setLibroMes(e.target.value)}
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/30 hover:bg-emerald-500/30 text-emerald-200 text-sm"
+                onClick={cargarLibroIva}
+                disabled={libroLoading}
+              >
+                {libroLoading ? 'Consultando...' : 'Ver resumen'}
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-sm"
+                onClick={() => void descargarLibroIva('csv')}
+                disabled={libroLoading}
+              >
+                CSV
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded bg-white/10 border border-white/20 hover:bg-white/20 text-slate-200 text-sm"
+                onClick={() => void descargarLibroIva('xlsx')}
+                disabled={libroLoading}
+              >
+                Excel
+              </button>
+            </div>
+            {libroError && <div className="text-sm text-rose-300">{libroError}</div>}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+            {!libroResult ? (
+              <div className="text-sm text-slate-400">
+                Consultá el período para ver resumen de comprobantes, neto gravado, IVA y total.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <div className="rounded-lg border border-white/10 bg-black/10 p-3">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">Comprobantes</div>
+                    <div className="text-lg font-semibold text-slate-100">
+                      {Number(libroResult?.summary?.comprobantes || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-black/10 p-3">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">Neto gravado</div>
+                    <div className="text-lg font-semibold text-slate-100">
+                      ${Number(libroResult?.summary?.neto_gravado || 0).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-black/10 p-3">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">IVA total</div>
+                    <div className="text-lg font-semibold text-slate-100">
+                      ${(
+                        Number(libroResult?.summary?.iva_10_5 || 0) +
+                        Number(libroResult?.summary?.iva_21 || 0) +
+                        Number(libroResult?.summary?.iva_27 || 0)
+                      ).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-black/10 p-3">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">Importe total</div>
+                    <div className="text-lg font-semibold text-slate-100">
+                      ${Number(libroResult?.summary?.total || 0).toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-xs">
+                    <thead className="text-left text-slate-400">
+                      <tr>
+                        <th className="py-2 pr-3">Fecha</th>
+                        <th className="py-2 pr-3">Comprobante</th>
+                        <th className="py-2 pr-3">Cliente</th>
+                        <th className="py-2 pr-3">Neto</th>
+                        <th className="py-2 pr-3">IVA</th>
+                        <th className="py-2 pr-3">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-200">
+                      {(Array.isArray(libroResult?.items) ? libroResult.items : []).slice(0, 20).map((item: any, index: number) => (
+                        <tr key={`libro-item-${index}`} className="border-t border-white/10">
+                          <td className="py-2 pr-3">{item?.fecha || '-'}</td>
+                          <td className="py-2 pr-3">
+                            {item?.tipo || '-'} {item?.punto_venta || '-'}-{item?.numero || '-'}
+                          </td>
+                          <td className="py-2 pr-3">{item?.cliente || '-'}</td>
+                          <td className="py-2 pr-3">${Number(item?.neto_gravado || 0).toFixed(2)}</td>
+                          <td className="py-2 pr-3">
+                            ${(
+                              Number(item?.iva_10_5 || 0) +
+                              Number(item?.iva_21 || 0) +
+                              Number(item?.iva_27 || 0)
+                            ).toFixed(2)}
+                          </td>
+                          <td className="py-2 pr-3">${Number(item?.total || 0).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </ChartCard>
     </div>

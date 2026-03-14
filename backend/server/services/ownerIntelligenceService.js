@@ -109,8 +109,9 @@ async function generateAutoReminders({ limit = 50, userId = null } = {}) {
   const created = [];
 
   for (const row of selected.slice(0, limit)) {
-    const canal = row.telefono ? 'whatsapp' : row.email ? 'email' : 'manual';
-    const destino = canal === 'whatsapp' ? row.telefono : canal === 'email' ? row.email : null;
+    const whatsappTarget = row.telefono_e164 || row.telefono || null;
+    const canal = whatsappTarget ? 'whatsapp' : row.email ? 'email' : 'manual';
+    const destino = canal === 'whatsapp' ? whatsappTarget : canal === 'email' ? row.email : null;
     const payload = {
       cliente: `${row.nombre || ''} ${row.apellido || ''}`.trim(),
       deuda_pendiente: Number(row.deuda_pendiente || 0),

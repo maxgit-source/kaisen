@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import Alert from '../components/Alert';
+import ProductPicker, { type ProductPickerOption } from '../components/ProductPicker';
 import Button from '../ui/Button';
 import { Api } from '../lib/api';
+import { uploadImageToCloudinary } from '../lib/cloudinary';
+import { usePriceLabels } from '../lib/priceLabels';
 
 type Producto = {
   id: number;
@@ -13,9 +16,12 @@ type Oferta = {
   id: number;
   nombre: string;
   descripcion?: string | null;
+  packaging_image_url?: string | null;
   tipo_oferta: 'cantidad' | 'fecha';
   producto_id?: number | null;
+  producto_ids?: number[];
   producto_nombre?: string | null;
+  producto_nombres?: string[];
   lista_precio_objetivo: 'local' | 'distribuidor' | 'final' | 'todas';
   cantidad_minima?: number;
   descuento_pct: number;
@@ -28,8 +34,10 @@ type Oferta = {
 const emptyForm = {
   nombre: '',
   descripcion: '',
+  packaging_image_url: '',
   tipo_oferta: 'cantidad' as 'cantidad' | 'fecha',
-  producto_id: '',
+  aplica_todos_productos: true,
+  producto_ids: [] as string[],
   lista_precio_objetivo: 'todas' as 'local' | 'distribuidor' | 'final' | 'todas',
   cantidad_minima: '1',
   descuento_pct: '10',
@@ -58,24 +66,48 @@ function fromDatetimeLocalInput(value?: string) {
   return d.toISOString();
 }
 
+function listCodeToLabel(
+  code: Oferta['lista_precio_objetivo'] | string | undefined,
+  labels: { local: string; distribuidor: string; final: string }
+) {
+  const normalized = String(code || '').trim().toLowerCase();
+  if (normalized === 'local') return labels.local;
+  if (normalized === 'distribuidor') return labels.distribuidor;
+  if (normalized === 'final') return labels.final;
+  return 'Todas las listas';
+}
+
 export default function OfertasPrecios() {
+  const { labels: priceLabels } = usePriceLabels();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [uploadingPackaging, setUploadingPackaging] = useState(false);
   const [ofertas, setOfertas] = useState<Oferta[]>([]);
   const [productos, setProductos] = useState<Producto[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [productoAAgregar, setProductoAAgregar] = useState<number | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
 
-  const productoOptions = useMemo(
+  const productoOptions = useMemo<ProductPickerOption[]>(
     () =>
       (productos || []).map((p) => ({
-        value: String(p.id),
-        label: `${p.name}${p.codigo ? ` (${p.codigo})` : ''}`,
+        id: Number(p.id),
+        name: String(p.name || ''),
+        codigo: p.codigo || null,
       })),
     [productos]
   );
+
+  const productosSeleccionados = useMemo(() => {
+    const selected = new Set(
+      form.producto_ids
+        .map((value) => Number(value))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    );
+    return (productos || []).filter((product) => selected.has(Number(product.id)));
+  }, [form.producto_ids, productos]);
 
   async function load() {
     setLoading(true);
@@ -107,6 +139,7 @@ export default function OfertasPrecios() {
 
   function resetForm() {
     setEditingId(null);
+    setProductoAAgregar(null);
     setForm({ ...emptyForm });
   }
 
@@ -116,8 +149,13 @@ export default function OfertasPrecios() {
     const payload: any = {
       nombre: form.nombre.trim(),
       descripcion: form.descripcion.trim() || undefined,
+      packaging_image_url: form.packaging_image_url.trim() || undefined,
       tipo_oferta: form.tipo_oferta,
-      producto_id: form.producto_id ? Number(form.producto_id) : undefined,
+      producto_ids: form.aplica_todos_productos
+        ? []
+        : form.producto_ids
+            .map((value) => Number(value))
+            .filter((n) => Number.isInteger(n) && n > 0),
       lista_precio_objetivo: form.lista_precio_objetivo,
       cantidad_minima: Number(form.cantidad_minima || 1),
       descuento_pct: Number(form.descuento_pct || 0),
@@ -148,12 +186,25 @@ export default function OfertasPrecios() {
   }
 
   function editOffer(oferta: Oferta) {
+    const selectedIds = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(oferta.producto_ids) ? oferta.producto_ids : []),
+          oferta.producto_id,
+        ]
+          .map((value) => Number(value))
+          .filter((n) => Number.isInteger(n) && n > 0)
+          .map((n) => String(n))
+      )
+    );
     setEditingId(oferta.id);
     setForm({
       nombre: oferta.nombre || '',
       descripcion: oferta.descripcion || '',
+      packaging_image_url: oferta.packaging_image_url || '',
       tipo_oferta: oferta.tipo_oferta || 'cantidad',
-      producto_id: oferta.producto_id ? String(oferta.producto_id) : '',
+      aplica_todos_productos: selectedIds.length === 0,
+      producto_ids: selectedIds,
       lista_precio_objetivo: oferta.lista_precio_objetivo || 'todas',
       cantidad_minima: String(oferta.cantidad_minima || 1),
       descuento_pct: String(oferta.descuento_pct || 0),
@@ -166,12 +217,47 @@ export default function OfertasPrecios() {
     setSuccess(null);
   }
 
+  function agregarProductoSeleccionado() {
+    if (!productoAAgregar || form.aplica_todos_productos) return;
+    setForm((prev) => {
+      const exists = prev.producto_ids.includes(String(productoAAgregar));
+      if (exists) return prev;
+      return {
+        ...prev,
+        producto_ids: [...prev.producto_ids, String(productoAAgregar)],
+      };
+    });
+    setProductoAAgregar(null);
+  }
+
+  function quitarProductoSeleccionado(productoId: number) {
+    setForm((prev) => ({
+      ...prev,
+      producto_ids: prev.producto_ids.filter((id) => Number(id) !== Number(productoId)),
+    }));
+  }
+
   async function toggleOffer(oferta: Oferta) {
     try {
       await Api.actualizarPrecioOferta(oferta.id, { activo: !normalizeActive(oferta.activo) });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo actualizar la oferta');
+    }
+  }
+
+  async function handlePackagingFile(file?: File | null) {
+    if (!file) return;
+    setError(null);
+    setSuccess(null);
+    setUploadingPackaging(true);
+    try {
+      const url = await uploadImageToCloudinary(file);
+      setForm((prev) => ({ ...prev, packaging_image_url: url }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo subir el packaging');
+    } finally {
+      setUploadingPackaging(false);
     }
   }
 
@@ -217,9 +303,9 @@ export default function OfertasPrecios() {
             }
           >
             <option value="todas">Todas las listas</option>
-            <option value="local">Lista local</option>
-            <option value="distribuidor">Lista distribuidor</option>
-            <option value="final">Lista final</option>
+            <option value="local">{priceLabels.local}</option>
+            <option value="distribuidor">{priceLabels.distribuidor}</option>
+            <option value="final">{priceLabels.final}</option>
           </select>
           <input
             className="input-modern text-sm"
@@ -231,18 +317,78 @@ export default function OfertasPrecios() {
             value={form.descuento_pct}
             onChange={(e) => setForm((prev) => ({ ...prev, descuento_pct: e.target.value }))}
           />
-          <select
-            className="input-modern text-sm md:col-span-2"
-            value={form.producto_id}
-            onChange={(e) => setForm((prev) => ({ ...prev, producto_id: e.target.value }))}
-          >
-            <option value="">Todos los productos</option>
-            {productoOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+          <div className="md:col-span-2 space-y-2">
+            <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+              {form.lista_precio_objetivo === 'todas'
+                ? 'La oferta aplica sobre las 3 listas. En venta se calcula sobre la lista elegida en esa venta.'
+                : `La oferta aplica sobre: ${listCodeToLabel(form.lista_precio_objetivo, priceLabels)}.`}
+            </div>
+            <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={form.aplica_todos_productos}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    aplica_todos_productos: e.target.checked,
+                    producto_ids: e.target.checked ? [] : prev.producto_ids,
+                  }))
+                }
+              />
+              Aplicar a todos los productos
+            </label>
+
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
+              <ProductPicker
+                options={productoOptions}
+                value={productoAAgregar}
+                onChange={(id) => setProductoAAgregar(id)}
+                placeholder="Buscar producto para agregar"
+                disabled={form.aplica_todos_productos}
+                allowClear
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={form.aplica_todos_productos || !productoAAgregar}
+                onClick={agregarProductoSeleccionado}
+              >
+                Agregar
+              </Button>
+            </div>
+
+            <div className="text-xs text-slate-400">
+              Productos seleccionados: {form.aplica_todos_productos ? 'Todos' : productosSeleccionados.length}
+            </div>
+            {!form.aplica_todos_productos && (
+              <div className="max-h-28 overflow-auto rounded-lg border border-white/10 bg-white/5 p-2 space-y-1">
+                {productosSeleccionados.map((product) => (
+                  <div
+                    key={product.id}
+                    className="flex items-center justify-between gap-2 rounded-md bg-white/5 border border-white/10 px-2 py-1"
+                  >
+                    <div className="text-xs text-slate-200 truncate">
+                      {product.name}
+                      {product.codigo ? ` (${product.codigo})` : ''}
+                    </div>
+                    <button
+                      type="button"
+                      className="text-xs rounded border border-white/20 px-1.5 py-0.5 hover:bg-white/10"
+                      onClick={() => quitarProductoSeleccionado(product.id)}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+                {!productosSeleccionados.length && (
+                  <div className="text-xs text-slate-500">No hay productos seleccionados.</div>
+                )}
+              </div>
+            )}
+            <div className="text-xs text-slate-500">
+              Activa "todos" o agrega productos uno por uno.
+            </div>
+          </div>
           <input
             className="input-modern text-sm"
             type="number"
@@ -265,6 +411,35 @@ export default function OfertasPrecios() {
             value={form.descripcion}
             onChange={(e) => setForm((prev) => ({ ...prev, descripcion: e.target.value }))}
           />
+          <div className="md:col-span-2 flex flex-col gap-2">
+            <div className="text-xs text-slate-400">Imagen de packaging</div>
+            <div className="flex flex-col md:flex-row gap-2">
+              <input
+                className="input-modern text-sm flex-1"
+                placeholder="URL imagen packaging"
+                value={form.packaging_image_url}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, packaging_image_url: e.target.value }))
+                }
+              />
+              <input
+                className="input-modern text-sm md:w-[250px]"
+                type="file"
+                accept="image/*"
+                onChange={(e) => handlePackagingFile(e.target.files?.[0])}
+              />
+            </div>
+            {uploadingPackaging && (
+              <div className="text-xs text-slate-400">Subiendo imagen de packaging...</div>
+            )}
+            {form.packaging_image_url && (
+              <img
+                src={form.packaging_image_url}
+                alt="Packaging"
+                className="h-16 w-16 rounded-lg object-cover border border-white/10"
+              />
+            )}
+          </div>
           <input
             className="input-modern text-sm"
             type="datetime-local"
@@ -335,10 +510,21 @@ export default function OfertasPrecios() {
                     <td className="py-2 pr-2">
                       <div className="font-medium">{o.nombre}</div>
                       {o.descripcion && <div className="text-xs text-slate-400">{o.descripcion}</div>}
+                      {o.packaging_image_url && (
+                        <img
+                          src={o.packaging_image_url}
+                          alt={`${o.nombre} packaging`}
+                          className="mt-1 h-10 w-10 rounded object-cover border border-white/10"
+                        />
+                      )}
                     </td>
                     <td className="py-2 pr-2">{o.tipo_oferta === 'cantidad' ? 'Cantidad' : 'Fecha'}</td>
-                    <td className="py-2 pr-2">{o.producto_nombre || 'Todos'}</td>
-                    <td className="py-2 pr-2">{o.lista_precio_objetivo || 'todas'}</td>
+                    <td className="py-2 pr-2">
+                      {Array.isArray(o.producto_nombres) && o.producto_nombres.length
+                        ? o.producto_nombres.join(', ')
+                        : o.producto_nombre || 'Todos'}
+                    </td>
+                    <td className="py-2 pr-2">{listCodeToLabel(o.lista_precio_objetivo || 'todas', priceLabels)}</td>
                     <td className="py-2 pr-2">{Number(o.descuento_pct || 0).toFixed(2)}%</td>
                     <td className="py-2 pr-2">{rule}</td>
                     <td className="py-2 pr-2">{active ? 'Activa' : 'Inactiva'}</td>

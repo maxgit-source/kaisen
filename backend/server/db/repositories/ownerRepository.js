@@ -36,6 +36,7 @@ async function listDebtRiskBase({ limit = 100 } = {}) {
             c.nombre,
             c.apellido,
             c.telefono,
+            c.telefono_e164,
             c.email,
             COALESCE(vd.deuda_pendiente, 0)::float AS deuda_pendiente,
             COALESCE(vd.deuda_0_30, 0)::float AS deuda_0_30,

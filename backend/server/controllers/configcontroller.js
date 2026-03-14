@@ -1,6 +1,7 @@
 const { check, validationResult } = require('express-validator');
 const { withTransaction } = require('../db/pg');
 const configRepo = require('../db/repositories/configRepository');
+const logger = require('../lib/logger');
 const audit = require('../services/auditService');
 
 const PRICE_LABEL_KEYS = {
@@ -18,6 +19,12 @@ const PRICE_LABEL_DEFAULTS = {
 const RANKING_METRIC_KEY = 'ranking_vendedores_metrica';
 const RANKING_METRIC_DEFAULT = 'cantidad_ventas';
 const RANKING_METRIC_OPTIONS = ['cantidad_ventas', 'margen_venta'];
+const BUSINESS_PROFILE_KEYS = {
+  name: 'business_name',
+  address: 'business_address',
+  logoUrl: 'business_logo_url',
+  clientMode: 'onboarding_client_mode',
+};
 
 async function getDolarBlue(req, res) {
   try {
@@ -27,7 +34,7 @@ async function getDolarBlue(req, res) {
       valor: valor != null ? valor : null,
     });
   } catch (e) {
-    console.error('Error obteniendo dolar_blue:', e);
+    logger.error({ err: e }, 'Error obteniendo dolar_blue:');
     res.status(500).json({ error: 'No se pudo obtener el valor de dólar blue' });
   }
 }
@@ -40,7 +47,7 @@ async function getDebtThreshold(req, res) {
       valor: valor != null ? valor : null,
     });
   } catch (e) {
-    console.error('Error obteniendo deuda_umbral_rojo:', e);
+    logger.error({ err: e }, 'Error obteniendo deuda_umbral_rojo:');
     res.status(500).json({ error: 'No se pudo obtener el umbral de deuda' });
   }
 }
@@ -180,7 +187,7 @@ async function setDolarBlueHandler(req, res) {
       message: 'Dólar blue actualizado y precios recalculados',
     });
   } catch (e) {
-    console.error('Error guardando dolar_blue y recalculando precios:', e);
+    logger.error({ err: e }, 'Error guardando dolar_blue y recalculando precios:');
     res
       .status(500)
       .json({ error: 'No se pudo guardar el valor de dólar blue ni recalcular precios' });
@@ -211,7 +218,7 @@ async function setDebtThresholdHandler(req, res) {
       message: 'Umbral de deuda actualizado',
     });
   } catch (e) {
-    console.error('Error guardando deuda_umbral_rojo:', e);
+    logger.error({ err: e }, 'Error guardando deuda_umbral_rojo:');
     res.status(500).json({ error: 'No se pudo guardar el umbral de deuda' });
   }
 }
@@ -295,6 +302,76 @@ async function setRankingMetric(req, res) {
   }
 }
 
+async function getBusinessProfile(req, res) {
+  try {
+    const [name, address, logoUrl, catalogName, catalogLogo, clientMode] = await Promise.all([
+      configRepo.getTextParam(BUSINESS_PROFILE_KEYS.name),
+      configRepo.getTextParam(BUSINESS_PROFILE_KEYS.address),
+      configRepo.getTextParam(BUSINESS_PROFILE_KEYS.logoUrl),
+      configRepo.getTextParam('catalogo_nombre'),
+      configRepo.getTextParam('catalogo_logo_url'),
+      configRepo.getTextParam(BUSINESS_PROFILE_KEYS.clientMode),
+    ]);
+
+    res.json({
+      nombre: name || catalogName || '',
+      direccion: address || '',
+      logo_url: logoUrl || catalogLogo || '',
+      client_mode: clientMode || 'manual',
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo obtener el perfil del negocio' });
+  }
+}
+
+const validateSetBusinessProfile = [
+  check('nombre').optional().isString().isLength({ min: 1, max: 120 }),
+  check('direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
+  check('logo_url').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  check('client_mode').optional().isIn(['manual', 'anonymous', 'later']),
+];
+
+async function setBusinessProfile(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  const usuarioId =
+    req.user?.sub && Number.isFinite(Number(req.user.sub))
+      ? Number(req.user.sub)
+      : null;
+
+  try {
+    const { nombre, direccion, logo_url, client_mode } = req.body || {};
+    if (typeof nombre !== 'undefined') {
+      const normalized = String(nombre || '').trim();
+      await Promise.all([
+        configRepo.setTextParam(BUSINESS_PROFILE_KEYS.name, normalized, usuarioId),
+        configRepo.setTextParam('catalogo_nombre', normalized, usuarioId),
+      ]);
+    }
+    if (typeof direccion !== 'undefined') {
+      await configRepo.setTextParam(
+        BUSINESS_PROFILE_KEYS.address,
+        String(direccion || '').trim(),
+        usuarioId
+      );
+    }
+    if (typeof logo_url !== 'undefined') {
+      const normalizedLogo = String(logo_url || '').trim();
+      await Promise.all([
+        configRepo.setTextParam(BUSINESS_PROFILE_KEYS.logoUrl, normalizedLogo, usuarioId),
+        configRepo.setTextParam('catalogo_logo_url', normalizedLogo, usuarioId),
+      ]);
+    }
+    if (typeof client_mode !== 'undefined') {
+      await configRepo.setTextParam(BUSINESS_PROFILE_KEYS.clientMode, String(client_mode), usuarioId);
+    }
+    return getBusinessProfile(req, res);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo guardar el perfil del negocio' });
+  }
+}
+
 module.exports = {
   getDolarBlue,
   setDolarBlue: [...validateSetDolarBlue, setDolarBlueHandler],
@@ -304,6 +381,8 @@ module.exports = {
   setPriceLabels: [...validateSetPriceLabels, setPriceLabelsHandler],
   getRankingMetric,
   setRankingMetric: [...validateSetRankingMetric, setRankingMetric],
+  getBusinessProfile,
+  setBusinessProfile: [...validateSetBusinessProfile, setBusinessProfile],
   resetPanelData: resetPanelDataHandler,
 };
 
@@ -382,7 +461,7 @@ async function resetPanelDataHandler(req, res) {
         'Datos del panel limpiados correctamente. Usuarios y login se mantienen intactos.',
     });
   } catch (e) {
-    console.error('Error reseteando datos del panel:', e);
+    logger.error({ err: e }, 'Error reseteando datos del panel:');
     res
       .status(500)
       .json({ error: 'No se pudieron limpiar los datos del panel' });

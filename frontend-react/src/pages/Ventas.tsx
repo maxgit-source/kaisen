@@ -6,8 +6,12 @@ import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
 import { usePriceLabels } from '../lib/priceLabels';
 import ProductPicker from '../components/ProductPicker';
+import HelpTooltip from '../components/HelpTooltip';
+import { useViewMode } from '../context/ViewModeContext';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { trackMobileEvent } from '../lib/mobileTelemetry';
+import { useSearchParams } from 'react-router-dom';
+import { useToast } from '../context/ToastContext';
 
 type Cliente = { id: number; nombre: string; apellido?: string };
 type Producto = {
@@ -112,7 +116,10 @@ type PuntoVentaArca = {
 };
 
 export default function Ventas() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { accessToken } = useAuth();
+  const toastApi = useToast();
+  const { isSimpleView } = useViewMode();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
   const isMobile = useMediaQuery('(max-width: 767px)');
   const isFletero = role === 'fletero';
@@ -171,6 +178,14 @@ export default function Ventas() {
     error: null,
   });
 
+  const [mpLinkModal, setMpLinkModal] = useState<{
+    abierto: boolean;
+    ventaId: number | null;
+    loading: boolean;
+    url: string | null;
+    error: string | null;
+  }>({ abierto: false, ventaId: null, loading: false, url: null, error: null });
+
   // Nueva venta state
   const [open, setOpen] = useState(false);
   const [clienteId, setClienteId] = useState<number | ''>('');
@@ -198,6 +213,29 @@ export default function Ventas() {
     fecha_serv_hasta: '',
     fecha_vto_pago: '',
   });
+
+  useEffect(() => {
+    if (!canCreateSale) return;
+    if (searchParams.get('open') !== '1') return;
+    setOpen(true);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('open');
+      return next;
+    }, { replace: true });
+  }, [canCreateSale, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    const onEscape = () => {
+      setOpen(false);
+      cerrarPagoModal();
+      cerrarDetalleVenta();
+      cerrarRemitoModal();
+    };
+
+    window.addEventListener('kaisen:escape', onEscape as EventListener);
+    return () => window.removeEventListener('kaisen:escape', onEscape as EventListener);
+  }, []);
 
   async function loadAll() {
     const startedAt = Date.now();
@@ -513,6 +551,13 @@ export default function Ventas() {
   function canRegistrarPagoVenta(venta: Venta) {
     if (venta.estado_pago === 'cancelado') return false;
     return ventaSaldoPendiente(venta) > 0.009;
+  }
+
+  function saleStatusLabel(venta: Venta) {
+    if (venta.estado_pago === 'cancelado') return 'Cancelada';
+    if ((venta.estado_entrega || 'pendiente') === 'entregado') return 'Entregada';
+    if (canRegistrarPagoVenta(venta)) return 'Pago pendiente';
+    return 'Al dia';
   }
 
   function abrirPagoModal(venta: Venta) {
@@ -910,6 +955,16 @@ export default function Ventas() {
     setFacturaError(null);
   }
 
+  async function generarLinkMP(v: Venta) {
+    setMpLinkModal({ abierto: true, ventaId: v.id, loading: true, url: null, error: null });
+    try {
+      const data = await Api.mpCreatePaymentLink(v.id);
+      setMpLinkModal((prev) => ({ ...prev, loading: false, url: data?.init_point || null }));
+    } catch (e: any) {
+      setMpLinkModal((prev) => ({ ...prev, loading: false, error: e?.message || 'No se pudo generar el link de pago' }));
+    }
+  }
+
   useEffect(() => {
     if (!detalleVenta.venta) return;
     const baseDate = new Date(detalleVenta.venta.fecha);
@@ -960,6 +1015,14 @@ export default function Ventas() {
             className={actionClass('bg-cyan-500/20 border-cyan-500/30 hover:bg-cyan-500/30 text-cyan-200', compact)}
           >
             Registrar pago
+          </button>
+        )}
+        {!isFletero && canRegistrarPagoVenta(v) && (
+          <button
+            onClick={() => generarLinkMP(v)}
+            className={actionClass('bg-blue-500/20 border-blue-500/30 hover:bg-blue-500/30 text-blue-200', compact)}
+          >
+            Link MP
           </button>
         )}
         {!isFletero && canEntregarVenta(v) && (
@@ -1156,6 +1219,9 @@ export default function Ventas() {
                     </select>
                   </label>
               </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Los precios se calculan automaticamente segun la lista seleccionada.
+              </div>
             </div>
 
             {isMobile ? (
@@ -1193,7 +1259,7 @@ export default function Ventas() {
                             step="0.01"
                             placeholder={autoPrice > 0 ? autoPrice.toFixed(2) : 'Ingrese precio'}
                             value={it.precio_unitario}
-                            onChange={(e) => updateItem(idx, { precio_unitario: e.target.value })}
+                            readOnly
                             className="w-full bg-white/10 border border-white/10 rounded px-2 py-1.5"
                           />
                         </label>
@@ -1276,7 +1342,7 @@ export default function Ventas() {
                               step="0.01"
                               placeholder={autoPrice > 0 ? autoPrice.toFixed(2) : 'Ingrese precio'}
                               value={it.precio_unitario}
-                              onChange={(e) => updateItem(idx, { precio_unitario: e.target.value })}
+                              readOnly
                               className="w-28 bg-white/10 border border-white/10 rounded px-2 py-1"
                             />
                           </td>
@@ -1343,13 +1409,20 @@ export default function Ventas() {
             headers={
               <thead className="text-left text-slate-400">
                 <tr>
-                  <th className="py-2 px-2">ID</th>
                   <th className="py-2 px-2">Cliente</th>
                   <th className="py-2 px-2">Fecha</th>
                   <th className="py-2 px-2">Total</th>
-                  <th className="py-2 px-2">Neto</th>
-                  <th className="py-2 px-2">Reserva</th>
-                  <th className="py-2 px-2">Entrega</th>
+                  {!isSimpleView && <th className="py-2 px-2">ID</th>}
+                  {!isSimpleView && <th className="py-2 px-2">Neto</th>}
+                  {!isSimpleView && <th className="py-2 px-2">Reserva</th>}
+                  <th className="py-2 px-2">
+                    <span className="inline-flex items-center gap-2">
+                      Estado
+                      <HelpTooltip>
+                        Estado de pago pendiente significa que la venta sigue abierta o con saldo por cobrar.
+                      </HelpTooltip>
+                    </span>
+                  </th>
                   <th className="py-2 px-2">Acciones</th>
                 </tr>
               </thead>
@@ -1358,26 +1431,32 @@ export default function Ventas() {
             <tbody className="text-slate-200">
               {(loading ? [] : abiertas).map((v) => (
                 <tr key={v.id} className="border-t border-white/10 hover:bg-white/5">
-                  <td className="py-2 px-2">{v.id}</td>
                   <td className="py-2 px-2">{v.cliente_nombre}</td>
                   <td className="py-2 px-2">{new Date(v.fecha).toLocaleString()}</td>
                   <td className="py-2 px-2">${Number(v.total || 0).toFixed(2)}</td>
-                  <td className="py-2 px-2">${Number(v.neto || 0).toFixed(2)}</td>
-                  <td className="py-2 px-2">
-                    {v.es_reserva ? (
-                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs border bg-amber-500/20 border-amber-500/40 text-amber-200">
-                        Reserva
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">-</span>
-                    )}
-                  </td>
-                  <td className="py-2 px-2">{v.estado_entrega || 'pendiente'}</td>
+                  {!isSimpleView && <td className="py-2 px-2">{v.id}</td>}
+                  {!isSimpleView && <td className="py-2 px-2">${Number(v.neto || 0).toFixed(2)}</td>}
+                  {!isSimpleView && (
+                    <td className="py-2 px-2">
+                      {v.es_reserva ? (
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs border bg-amber-500/20 border-amber-500/40 text-amber-200">
+                          Reserva
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
+                    </td>
+                  )}
+                  <td className="py-2 px-2">{saleStatusLabel(v)}</td>
                   <td className="py-2 px-2 space-x-2">{renderOpenSaleActions(v)}</td>
                 </tr>
               ))}
               {!loading && abiertas.length === 0 && (
-                <tr><td className="py-3 px-2 text-slate-400" colSpan={8}>Sin ventas</td></tr>
+                <tr>
+                  <td className="py-3 px-2 text-slate-400" colSpan={isSimpleView ? 5 : 8}>
+                    Sin ventas
+                  </td>
+                </tr>
               )}
             </tbody>
           </DataTable>
@@ -1418,13 +1497,13 @@ export default function Ventas() {
             headers={
               <thead className="text-left text-slate-400">
                 <tr>
-                  <th className="py-2 px-2">ID</th>
                   <th className="py-2 px-2">Cliente</th>
                   <th className="py-2 px-2">Fecha</th>
                   <th className="py-2 px-2">Total</th>
-                  <th className="py-2 px-2">Neto</th>
-                  <th className="py-2 px-2">Reserva</th>
-                  <th className="py-2 px-2">Entrega</th>
+                  {!isSimpleView && <th className="py-2 px-2">ID</th>}
+                  {!isSimpleView && <th className="py-2 px-2">Neto</th>}
+                  {!isSimpleView && <th className="py-2 px-2">Reserva</th>}
+                  <th className="py-2 px-2">Estado</th>
                   <th className="py-2 px-2">Acciones</th>
                 </tr>
               </thead>
@@ -1433,26 +1512,32 @@ export default function Ventas() {
             <tbody className="text-slate-200">
               {(loading ? [] : historial).map((v) => (
                 <tr key={v.id} className="border-t border-white/10 hover:bg-white/5">
-                  <td className="py-2 px-2">{v.id}</td>
                   <td className="py-2 px-2">{v.cliente_nombre}</td>
                   <td className="py-2 px-2">{new Date(v.fecha).toLocaleString()}</td>
                   <td className="py-2 px-2">${Number(v.total || 0).toFixed(2)}</td>
-                  <td className="py-2 px-2">${Number(v.neto || 0).toFixed(2)}</td>
-                  <td className="py-2 px-2">
-                    {v.es_reserva ? (
-                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs border bg-amber-500/20 border-amber-500/40 text-amber-200">
-                        Reserva
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">-</span>
-                    )}
-                  </td>
-                  <td className="py-2 px-2">{v.estado_entrega || 'pendiente'}</td>
+                  {!isSimpleView && <td className="py-2 px-2">{v.id}</td>}
+                  {!isSimpleView && <td className="py-2 px-2">${Number(v.neto || 0).toFixed(2)}</td>}
+                  {!isSimpleView && (
+                    <td className="py-2 px-2">
+                      {v.es_reserva ? (
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs border bg-amber-500/20 border-amber-500/40 text-amber-200">
+                          Reserva
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
+                    </td>
+                  )}
+                  <td className="py-2 px-2">{saleStatusLabel(v)}</td>
                   <td className="py-2 px-2 space-x-2">{renderHistorySaleActions(v)}</td>
                 </tr>
               ))}
               {!loading && historial.length === 0 && (
-                <tr><td className="py-3 px-2 text-slate-400" colSpan={8}>Sin historial</td></tr>
+                <tr>
+                  <td className="py-3 px-2 text-slate-400" colSpan={isSimpleView ? 5 : 8}>
+                    Sin historial
+                  </td>
+                </tr>
               )}
             </tbody>
           </DataTable>
@@ -1935,6 +2020,62 @@ export default function Ventas() {
                 {remitoModal.loading ? 'Generando...' : 'Descargar PDF'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {mpLinkModal.abierto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
+          <div className="app-card mobile-modal-card w-full max-w-md p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-slate-400">Link de pago MercadoPago</div>
+                <div className="text-base text-slate-100">Venta #{mpLinkModal.ventaId}</div>
+              </div>
+              <button
+                type="button"
+                className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20 text-xs"
+                onClick={() => setMpLinkModal({ abierto: false, ventaId: null, loading: false, url: null, error: null })}
+              >
+                Cerrar
+              </button>
+            </div>
+            {mpLinkModal.loading && (
+              <div className="py-4 text-center text-slate-400 text-sm">Generando link...</div>
+            )}
+            {mpLinkModal.error && (
+              <div className="text-xs text-rose-300 p-2 rounded bg-rose-500/10 border border-rose-500/20">
+                {mpLinkModal.error}
+              </div>
+            )}
+            {mpLinkModal.url && (
+              <div className="space-y-3">
+                <div className="text-xs text-slate-400">
+                  Compartí este link con el cliente para que realice el pago via MercadoPago:
+                </div>
+                <div className="flex items-center gap-2 p-2 rounded bg-white/5 border border-white/10">
+                  <span className="text-xs text-blue-300 truncate flex-1">{mpLinkModal.url}</span>
+                  <button
+                    type="button"
+                    className="px-2 py-1 rounded bg-blue-500/20 border border-blue-500/30 hover:bg-blue-500/30 text-blue-200 text-xs whitespace-nowrap"
+                    onClick={() => {
+                      navigator.clipboard.writeText(mpLinkModal.url!);
+                      toastApi.success('Link copiado al portapapeles');
+                    }}
+                  >
+                    Copiar
+                  </button>
+                </div>
+                <a
+                  href={mpLinkModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full text-center px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium"
+                >
+                  Abrir en MercadoPago
+                </a>
+              </div>
+            )}
           </div>
         </div>
       )}

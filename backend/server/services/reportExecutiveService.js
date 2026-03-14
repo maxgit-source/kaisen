@@ -1,22 +1,20 @@
 const { query } = require('../db/pg');
 const configRepo = require('../db/repositories/configRepository');
 const aiService = require('./aiService');
+const { getJson: getRuntimeJson, setJson: setRuntimeJson } = require('./runtimeStore');
 
 const REPORT_CACHE_MS = Number(process.env.AI_REPORT_CACHE_MS || 30000);
-const reportCache = new Map();
 
-function getCache(cache, key, ttlMs) {
-  const hit = cache.get(key);
-  if (!hit) return null;
-  if (Date.now() - hit.ts > ttlMs) {
-    cache.delete(key);
-    return null;
-  }
-  return hit.data;
+function buildCacheKey(key) {
+  return `report-executive:${key}`;
 }
 
-function setCache(cache, key, data) {
-  cache.set(key, { ts: Date.now(), data });
+async function getCache(key) {
+  return getRuntimeJson(buildCacheKey(key));
+}
+
+async function setCache(key, data, ttlMs) {
+  await setRuntimeJson(buildCacheKey(key), data, ttlMs);
   return data;
 }
 
@@ -104,7 +102,7 @@ async function buildExecutiveReportData({
     insightsLimit,
     topLimit,
   ].join(':');
-  const cached = getCache(reportCache, cacheKey, REPORT_CACHE_MS);
+  const cached = await getCache(cacheKey);
   if (cached) return cached;
   const { fromStr, toStr, days } = range;
   const { usuarioId, depositoId, clienteId, proveedorId } = filters;
@@ -350,7 +348,7 @@ async function buildExecutiveReportData({
     insights = null;
   }
 
-  return setCache(reportCache, cacheKey, {
+  return setCache(cacheKey, {
     generated_at: new Date().toISOString(),
     range: { desde: fromStr, hasta: toStr, dias: days },
     filters: { usuario_id: usuarioId, deposito_id: depositoId, cliente_id: clienteId, proveedor_id: proveedorId },
@@ -400,7 +398,7 @@ async function buildExecutiveReportData({
       alertas: insights?.items || [],
       alertas_resumen: insights?.summary || null,
     },
-  });
+  }, REPORT_CACHE_MS);
 }
 
 module.exports = {

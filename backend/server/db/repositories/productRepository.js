@@ -23,7 +23,7 @@ async function listProducts({
   dir = 'desc',
 } = {}) {
   const params = [];
-  const where = ['p.activo = TRUE', 'c.activo = TRUE'];
+  const where = ['p.activo = TRUE', 'p.deleted_at IS NULL', 'c.activo = TRUE'];
   if (q) {
     params.push(`%${q.toLowerCase()}%`);
     where.push(`(LOWER(p.nombre) LIKE $${params.length} OR LOWER(p.descripcion) LIKE $${params.length} OR LOWER(p.codigo) LIKE $${params.length})`);
@@ -150,7 +150,7 @@ async function listProductsPaginated({
   allowAll = false,
 } = {}) {
   const params = [];
-  const where = ['p.activo = TRUE', 'c.activo = TRUE'];
+  const where = ['p.activo = TRUE', 'p.deleted_at IS NULL', 'c.activo = TRUE'];
   if (q) {
     params.push(`%${q.toLowerCase()}%`);
     where.push(
@@ -746,8 +746,28 @@ async function updateProduct(
 }
 
 async function deactivateProduct(id) {
-  await query('UPDATE productos SET activo = FALSE, actualizado_en = CURRENT_TIMESTAMP WHERE id = $1', [id]);
+  await query(
+    `UPDATE productos
+        SET activo = FALSE,
+            deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
+            actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [id]
+  );
   await catalogSync.enqueueProductDelete(id);
+}
+
+async function restoreProduct(id) {
+  await query(
+    `UPDATE productos
+        SET activo = TRUE,
+            deleted_at = NULL,
+            actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [id]
+  );
+  await catalogSync.enqueueProduct(id);
+  return findById(id);
 }
 
 async function listCatalog() {
@@ -774,9 +794,10 @@ async function listCatalog() {
              c.nombre AS category_name,
              c.path AS category_path,
              (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
-       FROM productos p
-       JOIN categorias c ON c.id = p.categoria_id
+      FROM productos p
+      JOIN categorias c ON c.id = p.categoria_id
       WHERE p.activo = TRUE
+        AND p.deleted_at IS NULL
         AND c.activo = TRUE
       ORDER BY c.nombre ASC, p.nombre ASC`
   );
@@ -799,11 +820,39 @@ async function listCatalogExport() {
              c.nombre AS category_name,
              c.path AS category_path,
              (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
-       FROM productos p
-       JOIN categorias c ON c.id = p.categoria_id
+      FROM productos p
+      JOIN categorias c ON c.id = p.categoria_id
       WHERE p.activo = TRUE
+        AND p.deleted_at IS NULL
         AND c.activo = TRUE
       ORDER BY c.nombre ASC, p.nombre ASC`
+  );
+  return rows;
+}
+
+async function listDeletedProducts({ limit = 100, offset = 0 } = {}) {
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
+  const off = Math.max(parseInt(offset, 10) || 0, 0);
+  const { rows } = await query(
+    `SELECT p.id,
+            p.codigo AS codigo,
+            p.categoria_id AS category_id,
+            p.nombre AS name,
+            p.descripcion AS description,
+            p.precio_venta::float AS price,
+            p.precio_local::float AS price_local,
+            p.precio_distribuidor::float AS price_distribuidor,
+            p.precio_final::float AS precio_final,
+            c.nombre AS category_name,
+            c.path AS category_path,
+            p.deleted_at,
+            p.actualizado_en AS updated_at
+       FROM productos p
+       JOIN categorias c ON c.id = p.categoria_id
+      WHERE p.deleted_at IS NOT NULL
+      ORDER BY p.deleted_at DESC, p.id DESC
+      LIMIT $1 OFFSET $2`,
+    [lim, off]
   );
   return rows;
 }
@@ -835,6 +884,7 @@ async function findById(id) {
        JOIN categorias c ON c.id = p.categoria_id
       WHERE p.id = $1
         AND p.activo = TRUE
+        AND p.deleted_at IS NULL
       LIMIT 1`,
     [id]
   );
@@ -872,11 +922,12 @@ async function findByCodigo(codigo) {
              c.path AS category_path,
              COALESCE(i.cantidad_disponible, 0) AS stock_quantity,
             (SELECT url FROM producto_imagenes WHERE producto_id = p.id ORDER BY orden ASC, id ASC LIMIT 1) AS image_url
-       FROM productos p
-       JOIN categorias c ON c.id = p.categoria_id
+      FROM productos p
+      JOIN categorias c ON c.id = p.categoria_id
   LEFT JOIN inventario i ON i.producto_id = p.id
       WHERE p.codigo = $1
         AND p.activo = TRUE
+        AND p.deleted_at IS NULL
       LIMIT 1`,
     [cod]
   );
@@ -886,10 +937,11 @@ async function findByCodigo(codigo) {
 async function findByNameCategory(name, categoryId) {
   const { rows } = await query(
     `SELECT id
-       FROM productos
+      FROM productos
       WHERE LOWER(nombre) = LOWER($1)
         AND categoria_id = $2
         AND activo = TRUE
+        AND deleted_at IS NULL
       LIMIT 1`,
     [name, categoryId]
   );
@@ -936,5 +988,7 @@ module.exports = {
   createProduct,
   updateProduct,
   deactivateProduct,
+  restoreProduct,
+  listDeletedProducts,
   getProductHistory,
 };

@@ -1,17 +1,29 @@
 const { check, validationResult } = require('express-validator');
+const { query } = require('../db/pg');
 const configRepo = require('../db/repositories/configRepository');
+const logger = require('../lib/logger');
 const categoryRepo = require('../db/repositories/categoryRepository');
 const productRepo = require('../db/repositories/productRepository');
+const pricingRepo = require('../db/repositories/pricingRepository');
+const campaignRepo = require('../db/repositories/whatsappCampaignRepository');
 const ExcelJS = require('exceljs');
 const http = require('http');
 const https = require('https');
 const path = require('path');
 const { URL } = require('url');
 const catalogSync = require('../services/catalogSyncService');
+const { buildCatalogPdf } = require('../services/catalogPdfService');
+const { saveCatalogPdfBuffer } = require('../services/catalogPdfStorageService');
+const { processBatch } = require('../services/whatsappCampaignDispatcher');
+const {
+  getActiveProviderStatus,
+} = require('../services/messaging/providerRegistry');
+const { normalizePhoneToE164 } = require('../utils/whatsappPhone');
 
 const CONFIG_KEYS = {
   name: 'catalogo_nombre',
   logoUrl: 'catalogo_logo_url',
+  pdfLogoUrl: 'catalogo_pdf_logo_url',
   destacadoId: 'catalogo_destacado_producto_id',
   publicado: 'catalogo_publicado',
   priceType: 'catalogo_price_type',
@@ -61,6 +73,57 @@ function resolvePriceValue(product, priceKey) {
   const finalFallback = Number(product?.precio_final);
   if (Number.isFinite(finalFallback) && finalFallback > 0) return finalFallback;
   return 0;
+}
+
+function resolveOfferBasePriceValue(product, targetList, fallbackPriceKey) {
+  const list = String(targetList || '').trim().toLowerCase();
+  if (list === 'local') return resolvePriceValue(product, 'price_local');
+  if (list === 'distribuidor') return resolvePriceValue(product, 'price_distribuidor');
+  if (list === 'final') return resolvePriceValue(product, 'precio_final');
+  return resolvePriceValue(product, fallbackPriceKey || 'precio_final');
+}
+
+function priceKeyToListCode(priceKey) {
+  const key = String(priceKey || '').trim().toLowerCase();
+  if (key === 'price_local') return 'local';
+  if (key === 'price_distribuidor') return 'distribuidor';
+  return 'final';
+}
+
+function resolveOfferBasePriceContext(product, targetList, fallbackPriceKey, labels) {
+  const list = String(targetList || '').trim().toLowerCase();
+  const fallbackCode = priceKeyToListCode(fallbackPriceKey);
+  const listCode =
+    list === 'local' || list === 'distribuidor' || list === 'final'
+      ? list
+      : fallbackCode;
+  const listKey =
+    listCode === 'local'
+      ? 'price_local'
+      : listCode === 'distribuidor'
+      ? 'price_distribuidor'
+      : 'precio_final';
+
+  return {
+    precio_base: resolveOfferBasePriceValue(product, listCode, fallbackPriceKey),
+    lista_aplicada_codigo: listCode,
+    lista_aplicada_label: resolvePriceListLabel(listCode, labels),
+    lista_aplicada_key: listKey,
+  };
+}
+
+function resolvePriceListLabel(target, labels) {
+  const normalized = String(target || '').trim().toLowerCase();
+  if (normalized === 'local') return labels.local;
+  if (normalized === 'distribuidor') return labels.distribuidor;
+  if (normalized === 'final') return labels.final;
+  return 'Todas las listas';
+}
+
+function getUserId(req) {
+  if (req.authUser?.id) return Number(req.authUser.id);
+  if (req.user?.sub) return Number(req.user.sub);
+  return null;
 }
 
 function formatTimestamp(date) {
@@ -153,21 +216,24 @@ function resolveImageExtension(contentType, url) {
 
 async function getCatalogConfig(req, res) {
   try {
-    const [name, logoUrl, destacadoId, publicado, priceType, slug, domain] = await Promise.all([
+    const [name, logoUrl, pdfLogoUrl, destacadoId, publicado, priceType, slug, domain] =
+      await Promise.all([
       configRepo.getTextParam(CONFIG_KEYS.name),
       configRepo.getTextParam(CONFIG_KEYS.logoUrl),
+      configRepo.getTextParam(CONFIG_KEYS.pdfLogoUrl),
       configRepo.getNumericParam(CONFIG_KEYS.destacadoId),
       configRepo.getNumericParam(CONFIG_KEYS.publicado),
       configRepo.getTextParam(CONFIG_KEYS.priceType),
       configRepo.getTextParam(CONFIG_KEYS.slug),
       configRepo.getTextParam(CONFIG_KEYS.domain),
-    ]);
+      ]);
 
     const normalizedDomain = normalizeDomain(domain || '');
 
     res.json({
       nombre: name || '',
       logo_url: logoUrl || '',
+      pdf_logo_url: pdfLogoUrl || '',
       destacado_producto_id: destacadoId != null ? Number(destacadoId) : null,
       publicado: publicado != null ? Number(publicado) === 1 : true,
       price_type: priceType || 'final',
@@ -182,8 +248,16 @@ async function getCatalogConfig(req, res) {
 
 const validateConfig = [
   check('nombre').optional().isString().isLength({ max: 120 }),
-  check('logo_url').optional().isString().isLength({ max: 500 }),
-  check('destacado_producto_id').optional().isInt({ gt: 0 }),
+  check('logo_url').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  check('pdf_logo_url').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  check('destacado_producto_id')
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      const n = Number(value);
+      return Number.isInteger(n) && n > 0;
+    })
+    .withMessage('debe ser null o un ID de producto valido'),
   check('publicado').optional().isBoolean(),
   check('price_type').optional().isIn(['final', 'distribuidor', 'mayorista']),
   check('slug').optional().isString().isLength({ max: 64 }),
@@ -194,8 +268,16 @@ async function updateCatalogConfig(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  const { nombre, logo_url, destacado_producto_id, publicado, price_type, slug, dominio } =
-    req.body || {};
+  const {
+    nombre,
+    logo_url,
+    pdf_logo_url,
+    destacado_producto_id,
+    publicado,
+    price_type,
+    slug,
+    dominio,
+  } = req.body || {};
   const usuarioId =
     req.user?.sub && Number.isFinite(Number(req.user.sub)) ? Number(req.user.sub) : null;
 
@@ -205,6 +287,9 @@ async function updateCatalogConfig(req, res) {
     }
     if (typeof logo_url !== 'undefined') {
       await configRepo.setTextParam(CONFIG_KEYS.logoUrl, String(logo_url || ''), usuarioId);
+    }
+    if (typeof pdf_logo_url !== 'undefined') {
+      await configRepo.setTextParam(CONFIG_KEYS.pdfLogoUrl, String(pdf_logo_url || ''), usuarioId);
     }
     if (typeof destacado_producto_id !== 'undefined') {
       if (destacado_producto_id === null || destacado_producto_id === '') {
@@ -248,13 +333,24 @@ async function updateCatalogConfig(req, res) {
 }
 
 async function buildCatalogPublicData() {
-  const [configName, categorias, productos, priceType, logoUrl, destacadoId, publicado, slug, domain] =
-    await Promise.all([
+  const [
+    configName,
+    categorias,
+    productos,
+    priceType,
+    logoUrl,
+    pdfLogoUrl,
+    destacadoId,
+    publicado,
+    slug,
+    domain,
+  ] = await Promise.all([
       configRepo.getTextParam(CONFIG_KEYS.name),
       categoryRepo.getAllActive(),
       productRepo.listCatalog(),
       configRepo.getTextParam(CONFIG_KEYS.priceType),
       configRepo.getTextParam(CONFIG_KEYS.logoUrl),
+      configRepo.getTextParam(CONFIG_KEYS.pdfLogoUrl),
       configRepo.getNumericParam(CONFIG_KEYS.destacadoId),
       configRepo.getNumericParam(CONFIG_KEYS.publicado),
       configRepo.getTextParam(CONFIG_KEYS.slug),
@@ -275,6 +371,7 @@ async function buildCatalogPublicData() {
       config: {
         nombre: configName || '',
         logo_url: logoUrl || '',
+        pdf_logo_url: pdfLogoUrl || '',
         destacado_producto_id: destacadoId != null ? Number(destacadoId) : null,
         price_type: priceType || 'final',
         slug: normalizeSlug(slug || ''),
@@ -510,6 +607,308 @@ async function exportCatalogExcel(req, res) {
   }
 }
 
+async function exportCatalogPdf(req, res) {
+  const rawType = String(req.query.price_type || req.query.tipo_precio || 'final').toLowerCase();
+  const rawMode = String(req.query.mode || req.query.modo || 'precios').toLowerCase();
+  const mode = rawMode === 'ofertas' ? 'ofertas' : 'precios';
+
+  try {
+    const generated = await generateCatalogPdfArtifact({ mode, rawType });
+    const { buffer, priceType } = generated;
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const filename =
+      mode === 'ofertas'
+        ? `catalogo-ofertas-${dateStamp}.pdf`
+        : `catalogo-${priceType}-${dateStamp}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buffer);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo generar el PDF del catalogo' });
+  }
+}
+
+async function generateCatalogPdfArtifact({ mode = 'precios', rawType = 'final' } = {}) {
+  const labels = await getPriceLabels();
+  const PRICE_TYPES = buildPriceTypes(labels);
+  const priceType = PRICE_TYPES[rawType] ? rawType : 'final';
+  const priceConfig = PRICE_TYPES[priceType];
+
+  const [catalogName, logoUrl, pdfLogoUrl, products, offers] = await Promise.all([
+    configRepo.getTextParam(CONFIG_KEYS.name),
+    configRepo.getTextParam(CONFIG_KEYS.logoUrl),
+    configRepo.getTextParam(CONFIG_KEYS.pdfLogoUrl),
+    productRepo.listCatalogExport(),
+    pricingRepo.listOffers({ incluirInactivas: false }),
+  ]);
+
+  const productsById = new Map(
+    (products || []).map((product) => [Number(product.id), product])
+  );
+  const offersPrepared = (offers || []).map((o) => {
+    const productIds = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(o.producto_ids) ? o.producto_ids : []),
+          o.producto_id,
+        ]
+          .map((value) => Number(value))
+          .filter((n) => Number.isInteger(n) && n > 0)
+      )
+    );
+
+    const offerProducts = productIds
+      .map((id) => productsById.get(id))
+      .filter(Boolean)
+      .map((product) => {
+        const priceContext = resolveOfferBasePriceContext(
+          product,
+          o.lista_precio_objetivo,
+          priceConfig.key,
+          labels
+        );
+        const precioBase = Number(priceContext.precio_base || 0);
+        const descuentoPct = Number(o.descuento_pct || 0);
+        const precioOferta = Math.max(
+          0,
+          Number(precioBase || 0) - Number(precioBase || 0) * (descuentoPct / 100)
+        );
+        return {
+          ...product,
+          precio_base: precioBase,
+          precio_oferta: precioOferta,
+          lista_aplicada_codigo: priceContext.lista_aplicada_codigo,
+          lista_aplicada_label: priceContext.lista_aplicada_label,
+        };
+      });
+
+    return {
+      ...o,
+      lista_label: resolvePriceListLabel(o.lista_precio_objetivo, labels),
+      producto_ids: productIds,
+      offer_products: offerProducts,
+    };
+  });
+
+  const generatedAt = formatTimestamp(new Date());
+  const buffer = await buildCatalogPdf({
+    catalogName: catalogName || 'Catalogo',
+    logoUrl: pdfLogoUrl || logoUrl || '',
+    mode,
+    priceLabel: priceConfig.label,
+    generatedAt,
+    products: products || [],
+    offers: offersPrepared,
+    resolveProductPrice: (product) => resolvePriceValue(product, priceConfig.key),
+  });
+
+  return {
+    buffer,
+    mode,
+    priceType,
+    priceLabel: priceConfig.label,
+    catalogName: catalogName || 'Catalogo',
+    generatedAt,
+  };
+}
+
+async function listClientsByIds(ids = []) {
+  const clean = Array.from(
+    new Set(
+      (ids || [])
+        .map((v) => Number(v))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  );
+  if (!clean.length) return [];
+  const start = 1;
+  const marks = clean.map((_, idx) => `$${start + idx}`).join(', ');
+  const { rows } = await query(
+    `SELECT id,
+            nombre,
+            apellido,
+            telefono,
+            telefono_e164,
+            whatsapp_opt_in,
+            whatsapp_status
+       FROM clientes
+      WHERE id IN (${marks})
+        AND estado = 'activo'`,
+    clean
+  );
+  return rows || [];
+}
+
+const validateSendCatalogWhatsapp = [
+  check('mode').optional().isIn(['precios', 'ofertas']),
+  check('price_type').optional().isIn(['distribuidor', 'mayorista', 'final']),
+  check('campaign_name').optional().isString().isLength({ min: 3, max: 160 }),
+  check('message_text').optional().isString().isLength({ min: 1, max: 1200 }),
+  check('cliente_ids').isArray({ min: 1, max: 1000 }),
+  check('cliente_ids.*').isInt({ gt: 0 }),
+];
+
+async function sendCatalogWhatsappCampaign(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const rawMode = String(req.body?.mode || 'precios').toLowerCase();
+  const mode = rawMode === 'ofertas' ? 'ofertas' : 'precios';
+  const rawType = String(req.body?.price_type || 'final').toLowerCase();
+  const clienteIds = Array.isArray(req.body?.cliente_ids) ? req.body.cliente_ids : [];
+  const userId = getUserId(req);
+
+  try {
+    const providerStatus = await getActiveProviderStatus();
+    if (!providerStatus?.configured) {
+      return res.status(400).json({
+        error: 'El proveedor de WhatsApp no esta configurado en el backend.',
+      });
+    }
+    if (providerStatus.capabilities?.requiresConnection && providerStatus.state !== 'connected') {
+      return res.status(400).json({
+        error: 'WhatsApp Web no esta conectado. Vincula el canal antes de enviar la campana.',
+      });
+    }
+
+    const artifact = await generateCatalogPdfArtifact({ mode, rawType });
+    const storedPdf = await saveCatalogPdfBuffer({
+      req,
+      buffer: artifact.buffer,
+      prefix: mode === 'ofertas' ? 'catalogo-ofertas' : `catalogo-${artifact.priceType}`,
+    });
+    if (
+      providerStatus.capabilities?.supportsMediaUrl &&
+      !/^https?:\/\//i.test(String(storedPdf.fileUrl || ''))
+    ) {
+      return res.status(400).json({
+        error:
+          'El proveedor activo requiere una URL publica del PDF. Configura PUBLIC_ORIGIN.',
+      });
+    }
+
+    const pdfExport = await campaignRepo.createPdfExport({
+      mode,
+      priceType: mode === 'ofertas' ? null : artifact.priceType,
+      fileName: storedPdf.fileName,
+      fileUrl: storedPdf.fileUrl,
+      fileSizeBytes: storedPdf.fileSizeBytes,
+      checksumSha256: storedPdf.checksumSha256,
+      metadata: {
+        generated_at: artifact.generatedAt,
+        price_label: artifact.priceLabel,
+      },
+      createdBy: userId,
+    });
+
+    const campaignName =
+      String(req.body?.campaign_name || '').trim() ||
+      `${mode === 'ofertas' ? 'Ofertas' : 'Catalogo'} ${new Date().toISOString().slice(0, 10)}`;
+    const messageText =
+      String(req.body?.message_text || '').trim() ||
+      `Hola, te compartimos nuestro ${
+        mode === 'ofertas' ? 'PDF de ofertas' : 'catalogo actualizado'
+      }.`;
+
+    const campaign = await campaignRepo.createCampaign({
+      nombre: campaignName,
+      descripcion:
+        mode === 'ofertas'
+          ? 'Campana WhatsApp con PDF de ofertas'
+          : `Campana WhatsApp con PDF de catalogo (${artifact.priceLabel})`,
+      pdfExportId: pdfExport?.id || null,
+      pdfUrl: storedPdf.fileUrl,
+      plantillaCodigo: 'catalogo_pdf',
+      mensajeTexto: messageText,
+      metadata: {
+        mode,
+        price_type: mode === 'ofertas' ? null : artifact.priceType,
+        selected_client_count: clienteIds.length,
+        provider: providerStatus.provider || 'unknown',
+      },
+      createdBy: userId,
+    });
+
+    const clients = await listClientsByIds(clienteIds);
+    const byId = new Map(clients.map((c) => [Number(c.id), c]));
+    const recipientsPayload = [];
+    const skipped = [];
+
+    for (const rawId of clienteIds) {
+      const id = Number(rawId);
+      const client = byId.get(id);
+      if (!client) {
+        skipped.push({ cliente_id: id, reason: 'Cliente no encontrado o inactivo' });
+        continue;
+      }
+      const normalized = client.telefono_e164 || normalizePhoneToE164(client.telefono);
+      if (!normalized) {
+        recipientsPayload.push({
+          cliente_id: id,
+          destino_input: client.telefono || null,
+          destino_e164: null,
+          estado: 'failed',
+          metadata: { reason: 'Telefono invalido o ausente' },
+        });
+        continue;
+      }
+      recipientsPayload.push({
+        cliente_id: id,
+        destino_input: client.telefono || normalized,
+        destino_e164: normalized,
+        estado: 'pending',
+        metadata: {
+          cliente: `${client.nombre || ''} ${client.apellido || ''}`.trim(),
+          whatsapp_opt_in: Number(client.whatsapp_opt_in || 0) === 1,
+          whatsapp_status: client.whatsapp_status || 'unknown',
+        },
+      });
+    }
+
+    await campaignRepo.addCampaignRecipients(campaign.id, recipientsPayload);
+    await campaignRepo.setCampaignStatus(campaign.id, 'queued');
+    processBatch({ batchSize: 50 }).catch(() => {});
+
+    const summary = await campaignRepo.getCampaignStatusSummary(campaign.id);
+    res.status(201).json({
+      campaign_id: campaign.id,
+      pdf_url: storedPdf.fileUrl,
+      mode,
+      price_type: mode === 'ofertas' ? null : artifact.priceType,
+      summary,
+      skipped,
+    });
+  } catch (e) {
+    logger.error({ err: e }, '[catalogo] sendCatalogWhatsappCampaign error');
+    res.status(500).json({ error: e.message || 'No se pudo enviar la campana de WhatsApp' });
+  }
+}
+
+async function listCatalogWhatsappCampaigns(req, res) {
+  try {
+    const rows = await campaignRepo.listCampaigns({
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudieron obtener campanas de WhatsApp' });
+  }
+}
+
+async function getCatalogWhatsappCampaign(req, res) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID invalido' });
+  try {
+    const out = await campaignRepo.getCampaignDetail(id);
+    if (!out) return res.status(404).json({ error: 'Campana no encontrada' });
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo obtener la campana de WhatsApp' });
+  }
+}
+
 module.exports = {
   getCatalogConfig,
   updateCatalogConfig: [...validateConfig, updateCatalogConfig],
@@ -517,4 +916,8 @@ module.exports = {
   getCatalogPublic,
   getCatalogPublicBySlug,
   exportCatalogExcel,
+  exportCatalogPdf,
+  sendCatalogWhatsappCampaign: [...validateSendCatalogWhatsapp, sendCatalogWhatsappCampaign],
+  listCatalogWhatsappCampaigns,
+  getCatalogWhatsappCampaign,
 };

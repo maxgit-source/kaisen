@@ -13,5 +13,7 @@ router.get('/config/price-labels', auth, requireRole(['admin', 'gerente']), ctrl
 router.put('/config/price-labels', auth, requireRole(['admin', 'gerente']), ctrl.setPriceLabels);
 router.get('/config/ranking-vendedores', auth, requireRole(['admin']), ctrl.getRankingMetric);
 router.put('/config/ranking-vendedores', auth, requireRole(['admin']), ctrl.setRankingMetric);
+router.get('/config/business-profile', auth, requireRole(['admin', 'gerente']), ctrl.getBusinessProfile);
+router.put('/config/business-profile', auth, requireRole(['admin', 'gerente']), ctrl.setBusinessProfile);
 
 module.exports = router;

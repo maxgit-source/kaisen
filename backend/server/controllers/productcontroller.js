@@ -1,9 +1,11 @@
 const { check, validationResult } = require('express-validator');
 const path = require('path');
+const logger = require('../lib/logger');
 const { Readable } = require('stream');
 const ExcelJS = require('exceljs');
 const repo = require('../db/repositories/productRepository');
 const categoryRepo = require('../db/repositories/categoryRepository');
+const importJobs = require('../services/importJobService');
 
 const HEADER_ALIASES = {
   name: [
@@ -41,6 +43,8 @@ const HEADER_ALIASES = {
   camara_mp: ['camara', 'camara_mp', 'camera', 'camera_mp'],
   bateria_mah: ['bateria', 'bateria_mah', 'battery', 'battery_mah'],
 };
+
+const PRODUCT_IMPORT_ASYNC_THRESHOLD = 250;
 
 const HEADER_LOOKUP = (() => {
   const map = new Map();
@@ -362,7 +366,7 @@ async function getProducts(req, res) {
     const totalPages = perPage > 0 ? Math.max(1, Math.ceil((total || 0) / perPage)) : 1;
     res.json({ data: mapped, total, page: pageNum, totalPages });
   } catch (err) {
-    console.error('Error en getProducts:', err);
+    logger.error({ err: err }, 'Error en getProducts:');
     res.status(500).json({ error: 'Failed to fetch products' });
   }
 }
@@ -446,7 +450,7 @@ const validateProduct = [
 async function createProduct(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.error('ValidaciÃ³n fallida en createProduct:', errors.array(), { body: req.body });
+    logger.error('ValidaciÃ³n fallida en createProduct:', errors.array(), { body: req.body });
     return res.status(400).json({ errors: errors.array() });
   }
 
@@ -513,10 +517,10 @@ async function createProduct(req, res) {
   } catch (err) {
     const code = err.status || 500;
     if (code === 400) {
-      console.error('Bad request creating product:', err.message, { body: req.body });
+      logger.error({ err: err.message, body: req.body }, 'Bad request creating product:');
       return res.status(400).json({ error: err.message });
     }
-    console.error('Error creating product:', err, { body: req.body });
+    logger.error({ err, body: req.body }, 'Error creating product:');
     res.status(500).json({ error: 'Failed to create product' });
   }
 }
@@ -524,7 +528,7 @@ async function createProduct(req, res) {
 async function updateProduct(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.error('ValidaciÃ³n fallida en updateProduct:', errors.array(), { body: req.body });
+    logger.error('ValidaciÃ³n fallida en updateProduct:', errors.array(), { body: req.body });
     return res.status(400).json({ errors: errors.array() });
   }
 
@@ -596,10 +600,10 @@ async function updateProduct(req, res) {
   } catch (err) {
     const code = err.status || 500;
     if (code === 400) {
-      console.error('Bad request updating product:', err.message, { body: req.body });
+      logger.error({ err: err.message, body: req.body }, 'Bad request updating product:');
       return res.status(400).json({ error: err.message });
     }
-    console.error('Error updating product:', err, { body: req.body });
+    logger.error({ err, body: req.body }, 'Error updating product:');
     res.status(500).json({ error: 'Failed to update product' });
   }
 }
@@ -617,10 +621,40 @@ async function deleteProduct(req, res) {
       return res.status(400).json({ error: 'Invalid product ID' });
     }
     await repo.deactivateProduct(idNum);
-    res.json({ message: 'Product deleted successfully' });
+    res.json({ message: 'Producto enviado a papelera' });
   } catch (err) {
-    console.error('Error deleting product:', err);
+    logger.error({ err: err }, 'Error deleting product:');
     res.status(500).json({ error: 'Failed to delete product' });
+  }
+}
+
+async function listDeletedProducts(req, res) {
+  try {
+    const rows = await repo.listDeletedProducts({
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(rows);
+  } catch (err) {
+    logger.error({ err: err }, 'Error fetching deleted products:');
+    res.status(500).json({ error: 'No se pudo obtener la papelera de productos' });
+  }
+}
+
+async function restoreProduct(req, res) {
+  const productId = Number(req.params.id);
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return res.status(400).json({ error: 'Invalid product ID' });
+  }
+  try {
+    const restored = await repo.restoreProduct(productId);
+    if (!restored) {
+      return res.status(404).json({ error: 'Producto no encontrado en papelera' });
+    }
+    res.json({ message: 'Producto restaurado', product: restored });
+  } catch (err) {
+    logger.error({ err: err }, 'Error restoring product:');
+    res.status(500).json({ error: 'No se pudo restaurar el producto' });
   }
 }
 
@@ -637,7 +671,7 @@ async function getProductHistory(req, res) {
     const rows = await repo.getProductHistory(productId, { limit, offset });
     res.json(rows);
   } catch (err) {
-    console.error('Error fetching product history:', err);
+    logger.error({ err: err }, 'Error fetching product history:');
     res.status(500).json({ error: 'Failed to fetch product history' });
   }
 }
@@ -652,12 +686,12 @@ async function getProductByCodigo(req, res) {
     if (!row) return res.status(404).json({ error: 'Producto no encontrado' });
     res.json(row);
   } catch (err) {
-    console.error('Error fetching product by codigo:', err);
+    logger.error({ err: err }, 'Error fetching product by codigo:');
     res.status(500).json({ error: 'Failed to fetch product' });
   }
 }
 
-async function importProducts(req, res) {
+async function importProductsSync(req, res) {
   const file = req.file;
   if (!file || !file.buffer) {
     return res.status(400).json({ error: 'Archivo requerido (xlsx o csv)' });
@@ -1157,9 +1191,102 @@ async function importProducts(req, res) {
       errors,
     });
   } catch (err) {
-    console.error('Error importando productos:', err);
+    logger.error({ err: err }, 'Error importando productos:');
     return res.status(500).json({ error: 'No se pudo importar el archivo' });
   }
+}
+
+async function importProducts(req, res) {
+  const file = req.file;
+  if (!file || !file.buffer) {
+    return res.status(400).json({ error: 'Archivo requerido (xlsx o csv)' });
+  }
+
+  const dryRun =
+    String(req.query?.dry_run || req.query?.preview || '').trim() === '1';
+  const forceAsync = String(req.query?.async || '').trim() === '1';
+
+  if (dryRun) {
+    return importProductsSync(req, res);
+  }
+
+  let estimatedRows = 0;
+  try {
+    const worksheet = await loadWorksheet(file);
+    estimatedRows = Math.max(0, Number(worksheet?.rowCount || 0) - 1);
+  } catch (_) {
+    estimatedRows = 0;
+  }
+
+  if (!forceAsync && estimatedRows <= PRODUCT_IMPORT_ASYNC_THRESHOLD) {
+    return importProductsSync(req, res);
+  }
+
+  const job = importJobs.createJob({
+    type: 'productos-import',
+    fileName: file.originalname,
+    totalRows: estimatedRows,
+  });
+  importJobs.startJob(job.id, {
+    total_rows: estimatedRows,
+    processed_rows: 0,
+    created_rows: 0,
+    skipped_rows: 0,
+    message: 'Procesando importacion de productos',
+  });
+
+  const asyncReq = {
+    ...req,
+    query: {
+      ...(req.query || {}),
+      async: undefined,
+    },
+  };
+
+  setImmediate(async () => {
+    const fakeRes = {
+      statusCode: 200,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        if (this.statusCode >= 400) {
+          importJobs.failJob(job.id, {
+            error: payload?.error || 'Fallo la importacion de productos',
+            message: payload?.error || 'Fallo la importacion de productos',
+          });
+          return payload;
+        }
+
+        const totals = payload?.totals || {};
+        importJobs.finishJob(job.id, {
+          total_rows: Number(totals.rows || estimatedRows || 0),
+          processed_rows: Number(totals.rows || estimatedRows || 0),
+          created_rows: Number(totals.created || 0),
+          skipped_rows: Number(totals.skipped || 0),
+          errors: Array.isArray(payload?.errors) ? payload.errors : [],
+          preview: Array.isArray(payload?.preview) ? payload.preview : [],
+          message: `Importacion finalizada. ${Number(totals.created || 0)} productos creados`,
+        });
+        return payload;
+      },
+    };
+
+    try {
+      await importProductsSync(asyncReq, fakeRes);
+    } catch (error) {
+      importJobs.failJob(job.id, {
+        error: error?.message || 'Fallo la importacion de productos',
+        message: error?.message || 'Fallo la importacion de productos',
+      });
+    }
+  });
+
+  return res.status(202).json({
+    async: true,
+    job: importJobs.getJob(job.id),
+  });
 }
 
 module.exports = {
@@ -1167,6 +1294,8 @@ module.exports = {
   createProduct: [...validateProduct, createProduct],
   updateProduct: [...validateProduct, updateProduct],
   deleteProduct,
+  listDeletedProducts,
+  restoreProduct,
   getProductHistory,
   getProductByCodigo,
   importProducts,

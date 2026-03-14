@@ -33,6 +33,7 @@ const CLOUD_FEATURES = [
   'crm',
   'postventa',
   'multideposito',
+  'integraciones',
 ] as const;
 
 const CLOUD_STATUS: LicenseStatus = {

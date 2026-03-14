@@ -1,17 +1,28 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
 import MobileBottomNav from './MobileBottomNav';
 import AppAmbient from '../ui/AppAmbient';
+import WelcomeWizard from '../components/WelcomeWizard';
+import KeyboardShortcutsDialog from '../components/KeyboardShortcutsDialog';
+import OfflineIndicator from '../components/OfflineIndicator';
+import ChatWidget from '../components/ChatWidget';
+import { useViewMode } from '../context/ViewModeContext';
 import { useMediaQuery } from '../lib/useMediaQuery';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { usePWAUpdate } from '../hooks/usePWAUpdate';
 
 export default function AdminLayout() {
   const isDesktop = useMediaQuery('(min-width: 1024px)', true);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { viewMode } = useViewMode();
+  usePWAUpdate();
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -21,9 +32,97 @@ export default function AdminLayout() {
     if (isDesktop) setMobileMenuOpen(false);
   }, [isDesktop]);
 
+  useKeyboardShortcuts([
+    {
+      key: 'F1',
+      label: 'Caja rapida',
+      action: (event) => {
+        event.preventDefault();
+        navigate('/app/caja');
+      },
+    },
+    {
+      key: 'F2',
+      label: 'Nueva venta',
+      action: (event) => {
+        event.preventDefault();
+        navigate('/app/ventas?open=1');
+      },
+    },
+    {
+      key: 'F3',
+      label: 'Buscar producto',
+      action: (event) => {
+        event.preventDefault();
+        if (location.pathname === '/app/caja') {
+          window.dispatchEvent(new CustomEvent('kaisen:focus-product-search'));
+          return;
+        }
+        navigate('/app/caja?focus=search');
+      },
+    },
+    {
+      key: 'F5',
+      label: 'Actualizar',
+      action: (event) => {
+        event.preventDefault();
+        window.location.reload();
+      },
+    },
+    {
+      key: 'p',
+      label: 'Imprimir',
+      ctrlKey: true,
+      action: (event) => {
+        event.preventDefault();
+        window.print();
+      },
+    },
+    {
+      key: 'p',
+      label: 'Imprimir',
+      metaKey: true,
+      action: (event) => {
+        event.preventDefault();
+        window.print();
+      },
+    },
+    {
+      key: '/',
+      label: 'Ver atajos',
+      ctrlKey: true,
+      action: (event) => {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      },
+    },
+    {
+      key: '?',
+      label: 'Ver atajos',
+      shiftKey: true,
+      action: (event) => {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      },
+    },
+    {
+      key: 'Escape',
+      label: 'Cerrar',
+      allowInInputs: true,
+      action: () => {
+        setShortcutsOpen(false);
+        setMobileMenuOpen(false);
+        window.dispatchEvent(new CustomEvent('kaisen:escape'));
+      },
+    },
+  ]);
+
   return (
+    <>
+    <OfflineIndicator />
     <div
       className="app-root app-surface min-h-screen w-full grid relative overflow-hidden font-ui"
+      data-view-mode={viewMode}
       style={
         isDesktop
           ? { gridTemplateColumns: collapsed ? '88px 1fr' : '272px 1fr', gridTemplateRows: '72px 1fr' }
@@ -43,6 +142,7 @@ export default function AdminLayout() {
           isMobile={!isDesktop}
           onToggleSidebar={() => setCollapsed((current) => !current)}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
+          onOpenShortcuts={() => setShortcutsOpen(true)}
         />
       </div>
 
@@ -77,6 +177,11 @@ export default function AdminLayout() {
       </AnimatePresence>
 
       {!isDesktop && <MobileBottomNav />}
+
+      <WelcomeWizard />
+      <KeyboardShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <ChatWidget />
     </div>
+    </>
   );
 }
