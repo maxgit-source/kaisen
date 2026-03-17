@@ -319,25 +319,9 @@ app.use((err, req, res, next) => {
 //   START SERVER
 // ==============================
 function startServer({ port = PORT, host = HOST } = {}) {
-  // Verificar licencia al arrancar
-  const { getLicenseInfo } = require('./services/licenseService');
-  const licenseInfo = getLicenseInfo();
-  if (!licenseInfo.valid) {
-    console.error('');
-    console.error('⛔  LICENCIA INVÁLIDA');
-    console.error(`    Motivo: ${licenseInfo.reason}`);
-    console.error('    Configurá LICENSE_KEY en tu archivo .env');
-    console.error('    Contactá soporte para obtener una clave válida');
-    console.error('');
-    if (process.env.NODE_ENV === 'production') process.exit(1);
-  } else if (licenseInfo.dev) {
-    console.log('[licencia] Modo desarrollo — validación omitida');
-  } else {
-    console.log(`[licencia] ✅ ${licenseInfo.companyName} — válida hasta ${new Date(licenseInfo.expiresAt).toLocaleDateString('es-AR')}`);
-    if (licenseInfo.expiringSoon) {
-      console.warn(`[licencia] ⚠️  La licencia vence en ${licenseInfo.daysLeft} días. Renovar pronto.`);
-    }
-  }
+  // Cloud-only runtime: la licencia por instalación quedó fuera del arranque.
+  // Se conserva el servicio legacy para generar/validar claves cuando haga falta
+  // administrativamente, pero no debe bloquear el backend productivo.
 
   cleanupCatalogPdfOlderThan({ hours: 72 });
   bootActiveProvider().catch((err) => {
