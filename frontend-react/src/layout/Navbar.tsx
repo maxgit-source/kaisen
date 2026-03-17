@@ -1,13 +1,27 @@
-import { Bell, Search, Sun, Moon, LogOut, Menu } from 'lucide-react';
+import { Bell, Keyboard, Search, Sun, Moon, LogOut, Menu } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useLicense } from '../context/LicenseContext';
+import { useViewMode } from '../context/ViewModeContext';
 
 type Props = {
   onToggleSidebar?: () => void;
   onOpenMobileMenu?: () => void;
+  onOpenShortcuts?: () => void;
   isMobile?: boolean;
+};
+
+const ROUTE_LABELS: Record<string, { title: string; breadcrumb: string }> = {
+  '/app/dashboard': { title: 'Dashboard', breadcrumb: 'Inicio / Dashboard' },
+  '/app/caja': { title: 'Caja rapida', breadcrumb: 'Operacion / Caja rapida' },
+  '/app/ventas': { title: 'Ventas', breadcrumb: 'Operacion / Ventas' },
+  '/app/clientes': { title: 'Clientes', breadcrumb: 'Gestion / Clientes' },
+  '/app/productos': { title: 'Productos', breadcrumb: 'Gestion / Productos' },
+  '/app/stock': { title: 'Stock', breadcrumb: 'Gestion / Stock' },
+  '/app/finanzas': { title: 'Finanzas', breadcrumb: 'Analisis / Finanzas' },
+  '/app/informes': { title: 'Informes', breadcrumb: 'Analisis / Informes' },
 };
 
 function formatCountdown(expiresAt: string | null | undefined, nowMs: number) {
@@ -23,10 +37,18 @@ function formatCountdown(expiresAt: string | null | undefined, nowMs: number) {
   return `${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
 }
 
-export default function Navbar({ onToggleSidebar, onOpenMobileMenu, isMobile = false }: Props) {
+export default function Navbar({
+  onToggleSidebar,
+  onOpenMobileMenu,
+  onOpenShortcuts,
+  isMobile = false,
+}: Props) {
   const { theme, toggle } = useTheme();
   const { logout } = useAuth();
   const { status: licenseStatus } = useLicense();
+  const { viewMode, toggleViewMode } = useViewMode();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -53,6 +75,10 @@ export default function Navbar({ onToggleSidebar, onOpenMobileMenu, isMobile = f
 
   const licenseActive = Boolean(licenseStatus?.licensed);
   const licenseBadge = licenseActive ? 'Licencia activa' : 'Licencia inactiva';
+  const routeMeta = ROUTE_LABELS[location.pathname] || {
+    title: 'Kaisen',
+    breadcrumb: 'Operacion / Modulo',
+  };
 
   return (
     <header className="h-[72px] bg-black/40 backdrop-blur-xl border-b border-white/10 px-3 sm:px-4 lg:px-6 flex items-center justify-between text-slate-200">
@@ -74,8 +100,8 @@ export default function Navbar({ onToggleSidebar, onOpenMobileMenu, isMobile = f
           </button>
         )}
         <div className="min-w-0">
-          <div className="text-base sm:text-lg font-semibold text-white truncate">Dashboard</div>
-          <div className="hidden sm:block text-xs text-slate-400">Inicio / Dashboard</div>
+          <div className="text-base sm:text-lg font-semibold text-white truncate">{routeMeta.title}</div>
+          <div className="hidden sm:block text-xs text-slate-400">{routeMeta.breadcrumb}</div>
         </div>
       </div>
       <div className="flex items-center gap-1 sm:gap-2">
@@ -87,7 +113,30 @@ export default function Navbar({ onToggleSidebar, onOpenMobileMenu, isMobile = f
           <Search size={16} />
           <input placeholder="Buscar..." className="bg-transparent outline-none w-48 lg:w-56 text-sm" />
         </div>
-        <button className="h-10 w-10 inline-flex items-center justify-center rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40">
+        <button
+          type="button"
+          onClick={toggleViewMode}
+          className="hidden lg:inline-flex min-h-[40px] items-center rounded-xl border border-white/10 bg-white/5 px-3 text-xs text-slate-200 transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+          aria-label={`Cambiar a ${viewMode === 'simple' ? 'vista completa' : 'vista simple'}`}
+        >
+          {viewMode === 'simple' ? 'Vista simple' : 'Vista completa'}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenShortcuts}
+          className="h-10 w-10 inline-flex items-center justify-center rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+          aria-label="Abrir panel de atajos"
+          title="Atajos"
+        >
+          <Keyboard size={18} />
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/app/finanzas')}
+          className="h-10 w-10 inline-flex items-center justify-center rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+          aria-label="Ver alertas operativas"
+          title="Alertas"
+        >
           <Bell size={18} />
         </button>
         <button onClick={toggle} className="h-10 w-10 inline-flex items-center justify-center rounded-xl hover:bg-white/10 text-slate-200 border border-transparent hover:border-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40" title={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}>

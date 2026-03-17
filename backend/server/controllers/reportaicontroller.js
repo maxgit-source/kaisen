@@ -1,4 +1,5 @@
 const reportService = require('../services/reportExecutiveService');
+const logger = require('../lib/logger');
 const llm = require('../services/llmService');
 
 function parseNumber(value, fallback) {
@@ -28,7 +29,7 @@ async function reportData(req, res) {
     });
     res.json(data);
   } catch (e) {
-    console.error('[report-ai] reportData error:', e);
+    logger.error({ err: e }, '[report-ai] reportData error:');
     res.status(500).json({ error: 'No se pudo generar el reporte ejecutivo' });
   }
 }
@@ -61,7 +62,7 @@ async function reportSummary(req, res) {
     const narrative = await llm.generateExecutiveReportNarrative({ data });
     res.json({ narrative, data });
   } catch (e) {
-    console.error('[report-ai] reportSummary error:', e);
+    logger.error({ err: e }, '[report-ai] reportSummary error:');
     if (e && typeof e.message === 'string' && e.message.includes('No AI provider available')) {
       return res
         .status(503)

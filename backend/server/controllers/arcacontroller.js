@@ -17,6 +17,8 @@ const validateConfig = [
   body('permitir_sin_entrega').optional().isBoolean(),
   body('permitir_sin_pago').optional().isBoolean(),
   body('precios_incluyen_iva').optional().isBoolean(),
+  body('default_tipo_comprobante').optional().isIn(['A', 'B', 'C']),
+  body('alicuotas_iva').optional().isArray(),
   body('certificado_pem').optional().isString(),
   body('clave_privada_pem').optional().isString(),
   body('passphrase').optional().isString(),
@@ -59,6 +61,22 @@ async function testConnection(req, res) {
     res.json({ ok: true, ...result });
   } catch (e) {
     res.status(500).json({ error: e.message || 'No se pudo probar conexion ARCA' });
+  }
+}
+
+async function uploadP12(req, res) {
+  if (!req.file?.buffer) {
+    return res.status(400).json({ error: 'Archivo .p12 requerido' });
+  }
+  try {
+    const saved = await arcaService.importP12Certificate({
+      fileBuffer: req.file.buffer,
+      passphrase: req.body?.passphrase || '',
+      originalName: req.file.originalname,
+    });
+    res.json(arcaService.sanitizeConfig(saved));
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'No se pudo importar el certificado .p12' });
   }
 }
 
@@ -355,6 +373,7 @@ module.exports = {
   getConfig,
   setConfig: [...validateConfig, setConfig],
   testConnection,
+  uploadP12,
   listPuntosVenta,
   createPuntoVenta: [...validatePuntoVenta, createPuntoVenta],
   updatePuntoVenta: [...validatePuntoVenta, updatePuntoVenta],

@@ -16,6 +16,12 @@ import {
   Line,
 } from 'recharts';
 import Button from '../ui/Button';
+import HelpTooltip from '../components/HelpTooltip';
+import { useViewMode } from '../context/ViewModeContext';
+import CobranzasTab from './finanzas/tabs/CobranzasTab';
+import RepricingTab from './finanzas/tabs/RepricingTab';
+import FiscalTab from './finanzas/tabs/FiscalTab';
+import PresupuestosTab from './finanzas/tabs/PresupuestosTab';
 
 type PeriodKey = '24h' | '7d' | '30d' | 'custom';
 type TabKey =
@@ -37,6 +43,143 @@ type TabKey =
   | 'ofertas'
   | 'cashflow'
   | 'presupuestos';
+
+type FinanceTabGuide = {
+  key: TabKey;
+  label: string;
+  queMide: string;
+  comoLeer: string;
+  accion: string;
+};
+
+const FINANCE_TAB_GUIDES: FinanceTabGuide[] = [
+  {
+    key: 'bruta',
+    label: 'Ganancia bruta',
+    queMide: 'Cuanto queda de ventas despues de restar solo costo de productos.',
+    comoLeer: 'Si cae con ventas altas, hay problema de costos, descuentos o mezcla de productos.',
+    accion: 'Revisar top productos de bajo margen y ajustar precios u ofertas.',
+  },
+  {
+    key: 'neta',
+    label: 'Ganancia neta',
+    queMide: 'Resultado final luego de costos, gastos e inversiones del periodo.',
+    comoLeer: 'Un neto positivo sostenido confirma salud operativa; negativo exige correccion inmediata.',
+    accion: 'Bajar gastos no criticos y priorizar cobranzas de deuda vencida.',
+  },
+  {
+    key: 'producto',
+    label: 'Ganancia por producto',
+    queMide: 'Rentabilidad por SKU: ingresos, costo, ganancia y margen porcentual.',
+    comoLeer: 'Detecta productos que venden mucho pero aportan poco margen.',
+    accion: 'Subir precio, negociar costo o limitar promociones en SKU de bajo aporte.',
+  },
+  {
+    key: 'costos',
+    label: 'Costos de productos',
+    queMide: 'Costo total de compras y cantidades por articulo en el rango elegido.',
+    comoLeer: 'Picos de costo sin crecimiento de ventas anticipan compresion de margen.',
+    accion: 'Revisar proveedor, frecuencia de compra y costo en dolares por categoria.',
+  },
+  {
+    key: 'categorias',
+    label: 'Por categoria',
+    queMide: 'Rentabilidad agrupada por categoria comercial.',
+    comoLeer: 'Sirve para decidir donde acelerar ventas y donde proteger margen.',
+    accion: 'Invertir en categorias rentables y replantear las de margen bajo.',
+  },
+  {
+    key: 'clientes',
+    label: 'Por cliente',
+    queMide: 'Aporte economico por cliente, incluyendo deuda y margen.',
+    comoLeer: 'Un cliente con alta venta y baja rentabilidad puede consumir caja.',
+    accion: 'Renegociar condiciones, cupo y politica de descuentos por cliente.',
+  },
+  {
+    key: 'cobranzas',
+    label: 'Cobranzas',
+    queMide: 'Riesgo de mora, promesas de pago y recordatorios enviados.',
+    comoLeer: 'Bucket critico/alto y deuda >90 dias requieren gestion prioritaria.',
+    accion: 'Ejecutar recordatorios automaticos y seguimiento de promesas incumplidas.',
+  },
+  {
+    key: 'alertas',
+    label: 'Alertas',
+    queMide: 'Alertas accionables del centro de mando (caja, deuda y stock).',
+    comoLeer: 'Mas alertas criticas abiertas implica mayor riesgo operativo.',
+    accion: 'Resolver alertas por severidad y cerrar solo cuando la causa se normalice.',
+  },
+  {
+    key: 'margenes',
+    label: 'Margenes',
+    queMide: 'Margen en tiempo real por producto, vendedor o deposito.',
+    comoLeer: 'Comparar entidades ayuda a detectar desvio comercial o de costo.',
+    accion: 'Reentrenar equipo, ajustar surtido o mover stock segun performance.',
+  },
+  {
+    key: 'repricing',
+    label: 'Repricing',
+    queMide: 'Impacto esperado y aplicado de reglas de actualizacion de precios.',
+    comoLeer: 'Si el delta sugerido sube mucho, validar elasticidad antes de aplicar masivo.',
+    accion: 'Usar preview, aplicar por lotes y monitorear margen y conversion.',
+  },
+  {
+    key: 'fiscal',
+    label: 'Fiscal AR',
+    queMide: 'Retenciones y percepciones simuladas con reglas parametrizadas.',
+    comoLeer: 'Permite estimar carga fiscal antes de emitir comprobantes.',
+    accion: 'Corregir reglas de jurisdiccion y alicuotas segun normativa vigente.',
+  },
+  {
+    key: 'precios',
+    label: 'Listas de precios',
+    queMide: 'Estrategia de listas, reglas y simulacion por producto.',
+    comoLeer: 'Variaciones altas deben explicarse por costo, dolar o politica comercial.',
+    accion: 'Aprobar solo cambios que preserven margen minimo por categoria.',
+  },
+  {
+    key: 'integraciones',
+    label: 'Integraciones',
+    queMide: 'Estado de canales y jobs de sincronizacion.',
+    comoLeer: 'Jobs fallidos recurrentes indican riesgo de inconsistencia comercial.',
+    accion: 'Resolver credenciales, reintentos y monitoreo por canal.',
+  },
+  {
+    key: 'beta',
+    label: 'Programa beta',
+    queMide: 'Adopcion e impacto real de clientes beta con feedback medible.',
+    comoLeer: 'NPS bajo o impacto bajo pide ajuste de producto antes de escalar.',
+    accion: 'Priorizar fixes del feedback con mayor impacto en caja y margen.',
+  },
+  {
+    key: 'release',
+    label: 'Release train',
+    queMide: 'Ciclos mensuales, objetivos y changelog de negocio.',
+    comoLeer: 'Ayuda a verificar si cada release movio KPIs clave.',
+    accion: 'Cerrar ciclo solo con evidencia de impacto y sin deuda critica.',
+  },
+  {
+    key: 'ofertas',
+    label: 'Ofertas',
+    queMide: 'Performance del motor de ofertas sobre ventas y margen.',
+    comoLeer: 'Descuento alto sin aumento de volumen erosiona rentabilidad.',
+    accion: 'Mantener ofertas con uplift real y pausar las que destruyen margen.',
+  },
+  {
+    key: 'cashflow',
+    label: 'Flujo de caja',
+    queMide: 'Entradas, salidas y saldo acumulado diario/mensual.',
+    comoLeer: 'Dias bajo umbral minimo son senal temprana de tension de caja.',
+    accion: 'Acelerar cobranzas y diferir egresos no criticos.',
+  },
+  {
+    key: 'presupuestos',
+    label: 'Presupuestos',
+    queMide: 'Comparativo presupuesto vs real por categoria y tipo.',
+    comoLeer: 'Desvios recurrentes muestran planificacion imprecisa o ejecucion deficiente.',
+    accion: 'Ajustar presupuesto mensual y asignar responsables por desvio.',
+  },
+];
 
 type SerieGananciaNeta = {
   fecha: string;
@@ -539,10 +682,12 @@ function marginClass(margenPct: number) {
 }
 
 export default function Finanzas() {
+  const { isSimpleView } = useViewMode();
   const [period, setPeriod] = useState<PeriodKey>('30d');
   const [customDesde, setCustomDesde] = useState<string>('');
   const [customHasta, setCustomHasta] = useState<string>('');
   const [tab, setTab] = useState<TabKey>('neta');
+  const [showFinanceGuide, setShowFinanceGuide] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2258,6 +2403,11 @@ export default function Finanzas() {
     [costosProductos]
   );
 
+  const totalGastosPeriodo = useMemo(
+    () => serieNeta.reduce((acc, row) => acc + row.totalGastos + row.totalInversiones, 0),
+    [serieNeta]
+  );
+
   const totalPresupuestoMes = useMemo(
     () => presupuestoVsRealRows.reduce((acc, r) => acc + r.presupuesto, 0),
     [presupuestoVsRealRows]
@@ -2312,6 +2462,10 @@ export default function Finanzas() {
   );
 
   const topProducto = useMemo(() => productosRentables[0] ?? null, [productosRentables]);
+  const activeGuide = useMemo(
+    () => FINANCE_TAB_GUIDES.find((item) => item.key === tab) || null,
+    [tab]
+  );
   const filteredRiskRanking = useMemo(
     () =>
       riskRankingRows.filter((r) => (riskBucketFilter === 'all' ? true : String(r.bucket) === riskBucketFilter)),
@@ -2332,6 +2486,114 @@ export default function Finanzas() {
     const deltaPct = totals.actual > 0 ? (delta / totals.actual) * 100 : 0;
     return { ...totals, delta, deltaPct };
   }, [repricingPreviewRows]);
+
+  if (isSimpleView) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="text-2xl font-semibold bg-gradient-to-r from-slate-100 via-cyan-200 to-cyan-400 bg-clip-text text-transparent">
+              Finanzas
+            </div>
+            <div className="mt-1 text-sm text-slate-400">
+              Vista simple: solo los numeros que importan para decidir rapido.
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" className="h-8 px-3 text-xs" onClick={() => setPeriod('30d')}>
+              Ultimos 30 dias
+            </Button>
+            <Button type="button" variant="ghost" className="h-8 px-3 text-xs" onClick={() => setPeriod('7d')}>
+              Ultimos 7 dias
+            </Button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="app-card border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="app-card finance-card p-4">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Ventas del periodo</div>
+            <div className="text-3xl font-semibold font-data text-slate-100">
+              ${brutaResumen.totalVentas.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="mt-2 text-xs text-slate-500">Total vendido en el rango actual.</div>
+          </div>
+          <div className="app-card finance-card p-4">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Gastos del periodo</div>
+            <div className="text-3xl font-semibold font-data text-cyan-200">
+              ${totalGastosPeriodo.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="mt-2 text-xs text-slate-500">Incluye gastos e inversiones del periodo.</div>
+          </div>
+          <div className="app-card finance-card p-4">
+            <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+              Ganancia neta
+              <HelpTooltip>
+                La ganancia neta es lo que queda despues de costos, gastos e inversiones del periodo.
+              </HelpTooltip>
+            </div>
+            <div className="text-3xl font-semibold font-data text-emerald-200">
+              ${totalGananciaNeta.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="mt-2 text-xs text-slate-500">Resultado consolidado del negocio.</div>
+          </div>
+        </div>
+
+        <div className="app-card finance-card p-4">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+            <span>Margen bruto</span>
+            <HelpTooltip>
+              El margen bruto muestra cuanto queda de las ventas despues de restar solo el costo de los productos vendidos.
+            </HelpTooltip>
+          </div>
+          <div className="mt-2 text-2xl font-semibold font-data text-fuchsia-200">
+            {margenBruto.toFixed(1)}%
+          </div>
+          <div className="mt-4 h-72 finance-shimmer">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartGananciaNeta}>
+                <XAxis dataKey="fecha" stroke="#94a3b8" />
+                <YAxis stroke="#94a3b8" />
+                <Tooltip
+                  wrapperStyle={{ outline: 'none' }}
+                  contentStyle={{
+                    background: 'rgba(2,6,23,0.92)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 8,
+                    color: '#e2e8f0',
+                  }}
+                />
+                <Area type="monotone" dataKey="ventas" stroke="#4f46e5" fill="#6366f1" fillOpacity={0.18} name="Ventas" />
+                <Area type="monotone" dataKey="neta" stroke="#06b6d4" fill="#22d3ee" fillOpacity={0.22} name="Ganancia neta" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="app-card finance-card p-4">
+          <div className="text-sm font-medium text-slate-100">Alertas clave</div>
+          <div className="mt-3 space-y-3">
+            {ownerAlertsRows.slice(0, 4).map((alertRow) => (
+              <div key={alertRow.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <div className="text-sm text-slate-100">{alertRow.title}</div>
+                <div className="mt-1 text-xs text-slate-400">{alertRow.detail || 'Sin detalle adicional.'}</div>
+              </div>
+            ))}
+            {!ownerAlertsRows.length && (
+              <div className="rounded-2xl border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
+                No hay alertas abiertas. Cambia a vista completa para ver analisis detallado.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -2380,6 +2642,14 @@ export default function Finanzas() {
               />
             </div>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            className="h-8 px-3 text-xs"
+            onClick={() => setShowFinanceGuide((prev) => !prev)}
+          >
+            {showFinanceGuide ? 'Ocultar tutorial' : 'Ver tutorial de metricas'}
+          </Button>
         </div>
       </div>
 
@@ -2453,26 +2723,7 @@ export default function Finanzas() {
       </div>
 
       <div className="finance-tablist app-scrollbar">
-        {[
-          { key: 'bruta', label: 'Ganancia bruta' },
-          { key: 'neta', label: 'Ganancia neta' },
-          { key: 'producto', label: 'Ganancia por producto' },
-          { key: 'costos', label: 'Costos de productos' },
-          { key: 'categorias', label: 'Por categoria' },
-          { key: 'clientes', label: 'Por cliente' },
-          { key: 'cobranzas', label: 'Cobranzas' },
-          { key: 'alertas', label: 'Alertas' },
-          { key: 'margenes', label: 'Margenes' },
-          { key: 'repricing', label: 'Repricing' },
-          { key: 'fiscal', label: 'Fiscal AR' },
-          { key: 'precios', label: 'Listas de precios' },
-          { key: 'integraciones', label: 'Integraciones' },
-          { key: 'beta', label: 'Programa beta' },
-          { key: 'release', label: 'Release train' },
-          { key: 'ofertas', label: 'Ofertas' },
-          { key: 'cashflow', label: 'Flujo de caja' },
-          { key: 'presupuestos', label: 'Presupuestos' },
-        ].map((t) => (
+        {FINANCE_TAB_GUIDES.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -2483,6 +2734,49 @@ export default function Finanzas() {
           </button>
         ))}
       </div>
+
+      {activeGuide && (
+        <div className="app-card finance-card p-4 border border-cyan-500/20">
+          <div className="text-xs uppercase tracking-[0.2em] text-cyan-300">Guia rapida de la pestana activa</div>
+          <div className="text-sm text-slate-100 mt-1 font-medium">{activeGuide.label}</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="text-xs text-slate-400 uppercase tracking-[0.18em]">Que mide</div>
+              <div className="text-sm text-slate-200 mt-1">{activeGuide.queMide}</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="text-xs text-slate-400 uppercase tracking-[0.18em]">Como leerlo</div>
+              <div className="text-sm text-slate-200 mt-1">{activeGuide.comoLeer}</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="text-xs text-slate-400 uppercase tracking-[0.18em]">Accion recomendada</div>
+              <div className="text-sm text-slate-200 mt-1">{activeGuide.accion}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFinanceGuide && (
+        <div className="app-card finance-card p-4 border border-white/10">
+          <div className="text-sm text-slate-100 font-medium">Tutorial de Finanzas para el cliente</div>
+          <div className="text-xs text-slate-400 mt-1">
+            Esta guia explica que significa cada modulo y que decision tomar segun los resultados.
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3">
+            {FINANCE_TAB_GUIDES.map((item) => (
+              <div key={`guide-${item.key}`} className="rounded-lg border border-white/10 bg-white/5 p-3">
+                <div className="text-sm text-slate-100 font-medium">{item.label}</div>
+                <div className="text-xs text-slate-400 mt-2">Que mide</div>
+                <div className="text-sm text-slate-200">{item.queMide}</div>
+                <div className="text-xs text-slate-400 mt-2">Como leerlo</div>
+                <div className="text-sm text-slate-200">{item.comoLeer}</div>
+                <div className="text-xs text-slate-400 mt-2">Accion recomendada</div>
+                <div className="text-sm text-slate-200">{item.accion}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {tab === 'neta' && (
         <div className="app-card finance-card p-4">
@@ -2551,7 +2845,12 @@ export default function Finanzas() {
               <div className="text-xs text-slate-500 mt-2">Ventas menos costos</div>
             </div>
             <div className="app-card finance-card p-4">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Margen bruto</div>
+              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                <span>Margen bruto</span>
+                <HelpTooltip>
+                  El margen bruto mide que porcentaje de la venta queda despues de restar el costo directo del producto.
+                </HelpTooltip>
+              </div>
               <div className="text-2xl font-semibold font-data text-fuchsia-200">
                 {margenBruto.toFixed(1)}%
               </div>
@@ -2861,191 +3160,7 @@ export default function Finanzas() {
           </div>
         )}
 
-        {tab === 'cobranzas' && (
-          <div className="space-y-4">
-            <div className="app-card finance-card p-4 space-y-3">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <div className="text-sm text-slate-300">Panel global de cobranzas</div>
-                  <div className="text-xs text-slate-500">Ranking, promesas y recordatorios</div>
-                </div>
-                <div className="flex flex-wrap items-end gap-2">
-                  <select
-                    className="input-modern text-xs h-8"
-                    value={riskBucketFilter}
-                    onChange={(e) =>
-                      setRiskBucketFilter(e.target.value as 'all' | 'critical' | 'high' | 'medium' | 'low')
-                    }
-                  >
-                    <option value="all">Bucket: todos</option>
-                    <option value="critical">Critico</option>
-                    <option value="high">Alto</option>
-                    <option value="medium">Medio</option>
-                    <option value="low">Bajo</option>
-                  </select>
-                  <select
-                    className="input-modern text-xs h-8"
-                    value={promiseStatusFilter}
-                    onChange={(e) =>
-                      setPromiseStatusFilter(
-                        e.target.value as 'all' | 'pendiente' | 'cumplida' | 'incumplida' | 'cancelada'
-                      )
-                    }
-                  >
-                    <option value="all">Promesas: todas</option>
-                    <option value="pendiente">Pendiente</option>
-                    <option value="cumplida">Cumplida</option>
-                    <option value="incumplida">Incumplida</option>
-                    <option value="cancelada">Cancelada</option>
-                  </select>
-                  <select
-                    className="input-modern text-xs h-8"
-                    value={reminderStatusFilter}
-                    onChange={(e) => setReminderStatusFilter(e.target.value as 'all' | 'pending' | 'sent' | 'error')}
-                  >
-                    <option value="all">Recordatorios: todos</option>
-                    <option value="pending">Pending</option>
-                    <option value="sent">Sent</option>
-                    <option value="error">Error</option>
-                  </select>
-                  <input
-                    type="number"
-                    min={1}
-                    className="input-modern text-xs h-8 w-20"
-                    value={autoReminderLimit}
-                    onChange={(e) => setAutoReminderLimit(Number(e.target.value) || 1)}
-                  />
-                  <Button type="button" className="h-8 px-3 text-xs" onClick={handleAutoReminders} disabled={cobranzasLoading}>
-                    Auto recordatorios
-                  </Button>
-                  <Button type="button" variant="outline" className="h-8 px-3 text-xs" onClick={() => loadCobranzas(true)} disabled={cobranzasLoading}>
-                    {cobranzasLoading ? 'Actualizando...' : 'Actualizar'}
-                  </Button>
-                </div>
-              </div>
-              {cobranzasError && <div className="text-xs text-rose-300">{cobranzasError}</div>}
-              {autoReminderMsg && <div className="text-xs text-emerald-300">{autoReminderMsg}</div>}
-            </div>
-
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-              <div className="app-card finance-card p-4 xl:col-span-2">
-                <div className="text-sm text-slate-300 mb-2">Ranking de riesgo</div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs md:text-sm">
-                    <thead className="text-left text-slate-500">
-                      <tr>
-                        <th className="py-2 px-2">Cliente</th>
-                        <th className="py-2 px-2">Bucket</th>
-                        <th className="py-2 px-2 text-right">Score</th>
-                        <th className="py-2 px-2 text-right">Deuda</th>
-                        <th className="py-2 px-2 text-right">+90</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-slate-200">
-                      {filteredRiskRanking.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className="py-3 px-2 text-slate-500">
-                            Sin datos para el filtro.
-                          </td>
-                        </tr>
-                      )}
-                      {filteredRiskRanking.map((r) => (
-                        <tr key={r.cliente_id} className="border-t border-white/10 hover:bg-white/5">
-                          <td className="py-2 px-2">
-                            {r.nombre || 'Cliente'} {r.apellido || ''}
-                          </td>
-                          <td className="py-2 px-2">
-                            <span className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${riskBucketClass(r.bucket)}`}>
-                              {riskBucketLabel(r.bucket)}
-                            </span>
-                          </td>
-                          <td className="py-2 px-2 text-right font-data">{Number(r.score || 0).toFixed(0)}</td>
-                          <td className="py-2 px-2 text-right font-data">
-                            ${Number(r.deuda_pendiente || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                          </td>
-                          <td className="py-2 px-2 text-right font-data">
-                            ${Number(r.deuda_mas_90 || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="app-card finance-card p-4">
-                <div className="text-sm text-slate-300 mb-2">Seguimiento de promesas</div>
-                <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
-                  {promiseRows.length === 0 && <div className="text-xs text-slate-500">Sin promesas.</div>}
-                  {promiseRows.map((p) => (
-                    <div key={p.id} className="rounded-lg border border-white/10 bg-white/5 p-2">
-                      <div className="text-xs text-slate-200">
-                        {p.nombre || 'Cliente'} {p.apellido || ''}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        ${Number(p.monto_prometido || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} -{' '}
-                        {p.fecha_promesa ? new Date(p.fecha_promesa).toLocaleDateString() : '-'}
-                      </div>
-                      <select
-                        className="input-modern text-xs h-7 mt-2"
-                        value={p.estado}
-                        disabled={promiseUpdatingId === p.id}
-                        onChange={(e) =>
-                          handlePromiseStatusChange(
-                            p.id,
-                            e.target.value as 'pendiente' | 'cumplida' | 'incumplida' | 'cancelada'
-                          )
-                        }
-                      >
-                        <option value="pendiente">Pendiente</option>
-                        <option value="cumplida">Cumplida</option>
-                        <option value="incumplida">Incumplida</option>
-                        <option value="cancelada">Cancelada</option>
-                      </select>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="app-card finance-card p-4">
-              <div className="text-sm text-slate-300 mb-2">Recordatorios</div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs md:text-sm">
-                  <thead className="text-left text-slate-500">
-                    <tr>
-                      <th className="py-2 px-2">Cliente</th>
-                      <th className="py-2 px-2">Canal</th>
-                      <th className="py-2 px-2">Estado</th>
-                      <th className="py-2 px-2">Programado</th>
-                      <th className="py-2 px-2">Error</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-200">
-                    {reminderRows.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-3 px-2 text-slate-500">
-                          Sin recordatorios.
-                        </td>
-                      </tr>
-                    )}
-                    {reminderRows.map((r) => (
-                      <tr key={r.id} className="border-t border-white/10 hover:bg-white/5">
-                        <td className="py-2 px-2">
-                          {r.nombre || 'Cliente'} {r.apellido || ''}
-                        </td>
-                        <td className="py-2 px-2">{r.canal}</td>
-                        <td className="py-2 px-2">{r.status}</td>
-                        <td className="py-2 px-2">{r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '-'}</td>
-                        <td className="py-2 px-2 text-rose-300">{r.error_message || '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
+        {tab === 'cobranzas' && <CobranzasTab />}
 
         {tab === 'alertas' && (
           <div className="app-card finance-card p-4 space-y-4">
@@ -3192,435 +3307,9 @@ export default function Finanzas() {
           </div>
         )}
 
-        {tab === 'repricing' && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div className="app-card finance-card p-4">
-                <div className="text-sm text-slate-300 mb-2">Nueva regla de repricing</div>
-                <form className="grid grid-cols-1 md:grid-cols-2 gap-2" onSubmit={handleCreateRepricingRule}>
-                  <input
-                    className="input-modern text-xs md:col-span-2"
-                    placeholder="Nombre de regla"
-                    value={repricingForm.nombre}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, nombre: e.target.value }))}
-                  />
-                  <select
-                    className="input-modern text-xs"
-                    value={repricingForm.scope}
-                    onChange={(e) =>
-                      setRepricingForm((prev) => ({
-                        ...prev,
-                        scope: e.target.value as 'global' | 'categoria' | 'proveedor' | 'producto',
-                      }))
-                    }
-                  >
-                    <option value="global">Global</option>
-                    <option value="categoria">Categoria</option>
-                    <option value="proveedor">Proveedor</option>
-                    <option value="producto">Producto</option>
-                  </select>
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Scope ref id"
-                    value={repricingForm.scope_ref_id}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, scope_ref_id: e.target.value }))}
-                  />
-                  <select
-                    className="input-modern text-xs"
-                    value={repricingForm.channel}
-                    onChange={(e) =>
-                      setRepricingForm((prev) => ({
-                        ...prev,
-                        channel: e.target.value as '' | 'local' | 'distribuidor' | 'final',
-                      }))
-                    }
-                  >
-                    <option value="">Canal: todos</option>
-                    <option value="local">Local</option>
-                    <option value="distribuidor">Distribuidor</option>
-                    <option value="final">Final</option>
-                  </select>
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Prioridad"
-                    value={repricingForm.prioridad}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, prioridad: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Margen minimo"
-                    value={repricingForm.margin_min}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, margin_min: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Margen objetivo"
-                    value={repricingForm.margin_target}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, margin_target: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="USD pass"
-                    value={repricingForm.usd_pass_through}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, usd_pass_through: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Rounding"
-                    value={repricingForm.rounding_step}
-                    onChange={(e) => setRepricingForm((prev) => ({ ...prev, rounding_step: e.target.value }))}
-                  />
-                  <select
-                    className="input-modern text-xs"
-                    value={repricingForm.status}
-                    onChange={(e) =>
-                      setRepricingForm((prev) => ({ ...prev, status: e.target.value as 'active' | 'inactive' }))
-                    }
-                  >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                  <div className="flex items-center gap-2 md:col-span-2">
-                    <Button type="submit" className="h-8 px-3 text-xs" disabled={repricingSaving}>
-                      {repricingSaving ? 'Guardando...' : 'Guardar regla'}
-                    </Button>
-                    <Button type="button" variant="outline" className="h-8 px-3 text-xs" onClick={() => loadRepricingRules(true)} disabled={repricingRulesLoading}>
-                      {repricingRulesLoading ? 'Actualizando...' : 'Actualizar reglas'}
-                    </Button>
-                  </div>
-                </form>
-                {repricingRulesError && <div className="text-xs text-rose-300 mt-2">{repricingRulesError}</div>}
-              </div>
+        {tab === 'repricing' && <RepricingTab />}
 
-              <div className="app-card finance-card p-4">
-                <div className="text-sm text-slate-300 mb-2">Reglas cargadas</div>
-                <div className="space-y-2 max-h-[340px] overflow-auto pr-1">
-                  {repricingRules.length === 0 && <div className="text-xs text-slate-500">Sin reglas.</div>}
-                  {repricingRules.map((r) => (
-                    <div key={r.id} className="rounded-lg border border-white/10 bg-white/5 p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs text-slate-200">{r.nombre}</div>
-                        <Button type="button" variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleToggleRepricingRule(r)}>
-                          {r.status === 'active' ? 'Desactivar' : 'Activar'}
-                        </Button>
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        {r.scope}
-                        {r.scope_ref_id ? ` #${r.scope_ref_id}` : ''} - {r.channel || 'all'} - prioridad {r.prioridad}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        min {r.margin_min} | target {r.margin_target} | pass {r.usd_pass_through}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="app-card finance-card p-4 space-y-3">
-              <div className="flex flex-wrap items-end gap-2">
-                <input
-                  className="input-modern text-xs grow min-w-[260px]"
-                  placeholder="Producto IDs (coma), ej: 10,11,45"
-                  value={repricingProductIds}
-                  onChange={(e) => setRepricingProductIds(e.target.value)}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  className="input-modern text-xs w-24"
-                  value={repricingLimit}
-                  onChange={(e) => setRepricingLimit(Number(e.target.value) || 1)}
-                />
-                <Button type="button" className="h-8 px-3 text-xs" onClick={handlePreviewRepricing} disabled={repricingPreviewLoading}>
-                  {repricingPreviewLoading ? 'Simulando...' : 'Simular'}
-                </Button>
-                <Button type="button" variant="outline" className="h-8 px-3 text-xs" onClick={handleApplyRepricing} disabled={repricingPreviewLoading}>
-                  Aplicar
-                </Button>
-              </div>
-              {repricingPreviewError && <div className="text-xs text-rose-300">{repricingPreviewError}</div>}
-              {repricingApplyMsg && <div className="text-xs text-emerald-300">{repricingApplyMsg}</div>}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <div className="text-[11px] text-slate-400 uppercase">Actual</div>
-                  <div className="text-base font-semibold font-data text-slate-100">
-                    ${repricingImpact.actual.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <div className="text-[11px] text-slate-400 uppercase">Sugerido</div>
-                  <div className="text-base font-semibold font-data text-cyan-200">
-                    ${repricingImpact.sugerido.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <div className="text-[11px] text-slate-400 uppercase">Delta</div>
-                  <div className="text-base font-semibold font-data text-emerald-200">
-                    ${repricingImpact.delta.toLocaleString(undefined, { maximumFractionDigits: 0 })} ({repricingImpact.deltaPct.toFixed(2)}%)
-                  </div>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs md:text-sm">
-                  <thead className="text-left text-slate-500">
-                    <tr>
-                      <th className="py-2 px-2">Producto</th>
-                      <th className="py-2 px-2 text-right">Costo ARS</th>
-                      <th className="py-2 px-2 text-right">Venta actual</th>
-                      <th className="py-2 px-2 text-right">Venta sugerida</th>
-                      <th className="py-2 px-2 text-right">Delta %</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-200">
-                    {repricingPreviewRows.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-3 px-2 text-slate-500">
-                          Ejecuta simulacion para ver impacto.
-                        </td>
-                      </tr>
-                    )}
-                    {repricingPreviewRows.map((r) => {
-                      const actual = Number(r.precio_actual?.venta || 0);
-                      const sugerido = Number(r.precio_sugerido?.venta || 0);
-                      const deltaPct = actual > 0 ? ((sugerido - actual) / actual) * 100 : 0;
-                      return (
-                        <tr key={r.producto_id} className="border-t border-white/10 hover:bg-white/5">
-                          <td className="py-2 px-2">{r.producto}</td>
-                          <td className="py-2 px-2 text-right font-data">${Number(r.costo_ars || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                          <td className="py-2 px-2 text-right font-data">${actual.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                          <td className="py-2 px-2 text-right font-data">${sugerido.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                          <td className="py-2 px-2 text-right font-data">{deltaPct.toFixed(2)}%</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {tab === 'fiscal' && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div className="app-card finance-card p-4">
-                <div className="text-sm text-slate-300 mb-2">Nueva regla fiscal AR</div>
-                <form className="grid grid-cols-1 md:grid-cols-2 gap-2" onSubmit={handleCreateFiscalRule}>
-                  <select
-                    className="input-modern text-xs"
-                    value={fiscalForm.tipo}
-                    onChange={(e) =>
-                      setFiscalForm((prev) => ({
-                        ...prev,
-                        tipo: e.target.value as 'retencion' | 'percepcion',
-                      }))
-                    }
-                  >
-                    <option value="retencion">Retencion</option>
-                    <option value="percepcion">Percepcion</option>
-                  </select>
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Nombre"
-                    value={fiscalForm.nombre}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, nombre: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Impuesto"
-                    value={fiscalForm.impuesto}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, impuesto: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Jurisdiccion"
-                    value={fiscalForm.jurisdiccion}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, jurisdiccion: e.target.value }))}
-                  />
-                  <select
-                    className="input-modern text-xs"
-                    value={fiscalForm.scope}
-                    onChange={(e) =>
-                      setFiscalForm((prev) => ({
-                        ...prev,
-                        scope: e.target.value as 'global' | 'cliente' | 'proveedor' | 'producto',
-                      }))
-                    }
-                  >
-                    <option value="global">Global</option>
-                    <option value="cliente">Cliente</option>
-                    <option value="proveedor">Proveedor</option>
-                    <option value="producto">Producto</option>
-                  </select>
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Scope ref id"
-                    value={fiscalForm.scope_ref_id}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, scope_ref_id: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Alicuota (%)"
-                    value={fiscalForm.alicuota}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, alicuota: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Monto minimo"
-                    value={fiscalForm.monto_minimo}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, monto_minimo: e.target.value }))}
-                  />
-                  <input
-                    type="date"
-                    className="input-modern text-xs"
-                    value={fiscalForm.vigencia_desde}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, vigencia_desde: e.target.value }))}
-                  />
-                  <input
-                    type="date"
-                    className="input-modern text-xs"
-                    value={fiscalForm.vigencia_hasta}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, vigencia_hasta: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Prioridad"
-                    value={fiscalForm.prioridad}
-                    onChange={(e) => setFiscalForm((prev) => ({ ...prev, prioridad: e.target.value }))}
-                  />
-                  <label className="flex items-center gap-2 text-xs text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={fiscalForm.activo}
-                      onChange={(e) => setFiscalForm((prev) => ({ ...prev, activo: e.target.checked }))}
-                    />
-                    Activo
-                  </label>
-                  <div className="flex items-center gap-2 md:col-span-2">
-                    <Button type="submit" className="h-8 px-3 text-xs" disabled={fiscalSaving}>
-                      {fiscalSaving ? 'Guardando...' : 'Guardar regla'}
-                    </Button>
-                    <Button type="button" variant="outline" className="h-8 px-3 text-xs" onClick={() => loadFiscalRules(true)} disabled={fiscalLoading}>
-                      {fiscalLoading ? 'Actualizando...' : 'Actualizar reglas'}
-                    </Button>
-                  </div>
-                </form>
-                {fiscalError && <div className="text-xs text-rose-300 mt-2">{fiscalError}</div>}
-                {fiscalSuccess && <div className="text-xs text-emerald-300 mt-2">{fiscalSuccess}</div>}
-              </div>
-
-              <div className="app-card finance-card p-4">
-                <div className="text-sm text-slate-300 mb-2">Simulador fiscal AR</div>
-                <form className="grid grid-cols-1 md:grid-cols-2 gap-2" onSubmit={handleFiscalSimulation}>
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Monto base"
-                    value={fiscalSimForm.monto}
-                    onChange={(e) => setFiscalSimForm((prev) => ({ ...prev, monto: e.target.value }))}
-                  />
-                  <input
-                    type="date"
-                    className="input-modern text-xs"
-                    value={fiscalSimForm.fecha}
-                    onChange={(e) => setFiscalSimForm((prev) => ({ ...prev, fecha: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Cliente ID"
-                    value={fiscalSimForm.cliente_id}
-                    onChange={(e) => setFiscalSimForm((prev) => ({ ...prev, cliente_id: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs"
-                    placeholder="Proveedor ID"
-                    value={fiscalSimForm.proveedor_id}
-                    onChange={(e) => setFiscalSimForm((prev) => ({ ...prev, proveedor_id: e.target.value }))}
-                  />
-                  <input
-                    className="input-modern text-xs md:col-span-2"
-                    placeholder="Producto ID"
-                    value={fiscalSimForm.producto_id}
-                    onChange={(e) => setFiscalSimForm((prev) => ({ ...prev, producto_id: e.target.value }))}
-                  />
-                  <Button type="submit" className="h-8 px-3 text-xs md:col-span-2" disabled={fiscalSimLoading}>
-                    {fiscalSimLoading ? 'Simulando...' : 'Simular calculo'}
-                  </Button>
-                </form>
-                {fiscalSimError && <div className="text-xs text-rose-300 mt-2">{fiscalSimError}</div>}
-                {fiscalSimResult && (
-                  <div className="mt-3 space-y-2">
-                    <div className="text-xs text-slate-300">
-                      Base: ${Number(fiscalSimResult.monto_base || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </div>
-                    <div className="text-xs text-cyan-200">
-                      Total fiscal: ${Number(fiscalSimResult.total_fiscal || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </div>
-                    <div className="space-y-1 max-h-40 overflow-auto pr-1">
-                      {fiscalSimResult.detalle.length === 0 && (
-                        <div className="text-xs text-slate-500">No aplican reglas para esta simulacion.</div>
-                      )}
-                      {fiscalSimResult.detalle.map((d) => (
-                        <div key={d.rule_id} className="rounded border border-white/10 bg-white/5 p-2 text-xs">
-                          <div className="text-slate-200">{d.nombre}</div>
-                          <div className="text-slate-400">
-                            {d.tipo} - {Number(d.alicuota || 0).toFixed(2)}% - ${Number(d.monto || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="app-card finance-card p-4">
-              <div className="text-sm text-slate-300 mb-2">Reglas fiscales vigentes</div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs md:text-sm">
-                  <thead className="text-left text-slate-500">
-                    <tr>
-                      <th className="py-2 px-2">Nombre</th>
-                      <th className="py-2 px-2">Tipo</th>
-                      <th className="py-2 px-2">Scope</th>
-                      <th className="py-2 px-2 text-right">Alicuota</th>
-                      <th className="py-2 px-2 text-right">Minimo</th>
-                      <th className="py-2 px-2 text-right">Prioridad</th>
-                      <th className="py-2 px-2">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-200">
-                    {fiscalRules.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="py-3 px-2 text-slate-500">
-                          Sin reglas fiscales cargadas.
-                        </td>
-                      </tr>
-                    )}
-                    {fiscalRules.map((r) => (
-                      <tr key={r.id} className="border-t border-white/10 hover:bg-white/5">
-                        <td className="py-2 px-2">{r.nombre}</td>
-                        <td className="py-2 px-2">{r.tipo}</td>
-                        <td className="py-2 px-2">
-                          {r.scope}
-                          {r.scope_ref_id ? ` #${r.scope_ref_id}` : ''}
-                        </td>
-                        <td className="py-2 px-2 text-right font-data">{Number(r.alicuota || 0).toFixed(2)}%</td>
-                        <td className="py-2 px-2 text-right font-data">${Number(r.monto_minimo || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                        <td className="py-2 px-2 text-right font-data">{Number(r.prioridad || 0)}</td>
-                        <td className="py-2 px-2">
-                          <Button type="button" variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleToggleFiscalRule(r)}>
-                            {Number(r.activo || 0) === 1 ? 'Desactivar' : 'Activar'}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
+        {tab === 'fiscal' && <FiscalTab />}
 
         {tab === 'precios' && (
           <div className="space-y-4">
@@ -4420,285 +4109,7 @@ export default function Finanzas() {
           </div>
         )}
 
-        {tab === 'presupuestos' && (
-          <div className="app-card finance-card p-4 space-y-4">
-            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-              <div>
-                <div className="text-sm text-slate-300 mb-1">Presupuesto vs real por categoria</div>
-                <div className="text-xs text-slate-500">
-                  Total presupuesto:{' '}
-                  <span className="font-medium text-slate-200 dark:text-slate-200">
-                    {totalPresupuestoMes.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </span>
-                  {' - '}Total real:{' '}
-                  <span className="font-medium text-slate-200 dark:text-slate-200">
-                    {totalRealMes.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </span>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">Anio</label>
-                  <input
-                    type="number"
-                    className="input-modern text-xs md:text-sm w-24"
-                    value={presupuestoAnio}
-                    onChange={(e) => setPresupuestoAnio(Number(e.target.value) || presupuestoAnio)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">Mes</label>
-                  <select
-                    className="input-modern text-xs md:text-sm w-28"
-                    value={presupuestoMes}
-                    onChange={(e) => setPresupuestoMes(Number(e.target.value) || presupuestoMes)}
-                  >
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                      <option key={m} value={m}>
-                        {m.toString().padStart(2, '0')}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="h-72 lg:col-span-2">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={presupuestoVsRealRows.map((r) => ({
-                      label: `${r.tipo === 'ventas' ? 'Ventas' : 'Gastos'} - ${r.categoria}`,
-                      presupuesto: r.presupuesto,
-                      real: r.real,
-                    }))}
-                    margin={{ left: 0, right: 0 }}
-                  >
-                    <XAxis dataKey="label" hide />
-                    <YAxis />
-                    <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
-                    <Bar dataKey="presupuesto" stackId="a" fill="#6366f1" name="Presupuesto" />
-                    <Bar dataKey="real" stackId="a" fill="#f59e0b" name="Real" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="app-panel p-3 space-y-4">
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Ventas</div>
-                  <div className="h-36">
-                    {presupuestoVentasPie.length === 0 ? (
-                      <div className="text-xs text-slate-500">Sin presupuesto de ventas.</div>
-                    ) : (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie data={presupuestoVentasPie} dataKey="value" nameKey="name" innerRadius={35} outerRadius={60}>
-                            {presupuestoVentasPie.map((entry, index) => (
-                              <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Presupuesto: {presupuestoTotales.presupuestoVentas.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
-                    - Real: {presupuestoTotales.realVentas.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </div>
-                  {presupuestoVentasExceso > 0 && (
-                    <div className="text-xs text-amber-600 mt-1">
-                      Exceso: {presupuestoVentasExceso.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Gastos</div>
-                  <div className="h-36">
-                    {presupuestoGastosPie.length === 0 ? (
-                      <div className="text-xs text-slate-500">Sin presupuesto de gastos.</div>
-                    ) : (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie data={presupuestoGastosPie} dataKey="value" nameKey="name" innerRadius={35} outerRadius={60}>
-                            {presupuestoGastosPie.map((entry, index) => (
-                              <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Presupuesto: {presupuestoTotales.presupuestoGastos.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
-                    - Real: {presupuestoTotales.realGastos.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </div>
-                  {presupuestoGastosExceso > 0 && (
-                    <div className="text-xs text-amber-600 mt-1">
-                      Exceso: {presupuestoGastosExceso.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs md:text-sm">
-                  <thead className="text-left text-slate-500">
-                    <tr>
-                      <th className="py-2 px-2">Tipo</th>
-                      <th className="py-2 px-2">Categoria</th>
-                      <th className="py-2 px-2 text-right">Presupuesto</th>
-                      <th className="py-2 px-2 text-right">Real</th>
-                      <th className="py-2 px-2 text-right">Diferencia</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-200">
-                    {presupuestoVsRealRows.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-4 text-center text-slate-500">
-                          Sin datos de presupuesto para el mes seleccionado.
-                        </td>
-                      </tr>
-                    )}
-                    {presupuestoVsRealRows.map((r, idx) => (
-                      <tr key={`${r.tipo}-${r.categoria}-${idx}`} className="border-t border-white/10 hover:bg-white/5">
-                        <td className="py-2 px-2 capitalize">{r.tipo}</td>
-                        <td className="py-2 px-2">{r.categoria}</td>
-                        <td className="py-2 px-2 text-right">
-                          {r.presupuesto.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="py-2 px-2 text-right">
-                          {r.real.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="py-2 px-2 text-right">
-                          {r.diferencia.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="space-y-4">
-                <div className="app-panel p-3">
-                  <div className="text-sm text-slate-300 mb-2">
-                    {presupuestoEditando ? 'Editar presupuesto' : 'Nuevo presupuesto'}
-                  </div>
-                  <form className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end" onSubmit={handleGuardarPresupuesto}>
-                    <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">Tipo</label>
-                      <select
-                        className="input-modern text-xs md:text-sm w-full"
-                        value={presupuestoForm.tipo}
-                        onChange={(e) =>
-                          setPresupuestoForm((prev) => ({ ...prev, tipo: e.target.value as 'ventas' | 'gastos' }))
-                        }
-                      >
-                        <option value="ventas">Ventas</option>
-                        <option value="gastos">Gastos</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">Categoria</label>
-                      <input
-                        className="input-modern text-xs md:text-sm w-full"
-                        value={presupuestoForm.categoria}
-                        list="presupuesto-categorias"
-                        onChange={(e) => setPresupuestoForm((prev) => ({ ...prev, categoria: e.target.value }))}
-                        placeholder="Ej: Servicios"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">Monto</label>
-                      <input
-                        type="number"
-                        min="0"
-                        className="input-modern text-xs md:text-sm w-full"
-                        value={presupuestoForm.monto}
-                        onChange={(e) => setPresupuestoForm((prev) => ({ ...prev, monto: e.target.value }))}
-                        placeholder="0"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="submit" disabled={presupuestoGuardando}>
-                        {presupuestoEditando ? 'Actualizar' : 'Guardar'}
-                      </Button>
-                      {presupuestoEditando && (
-                        <Button type="button" variant="ghost" onClick={handleCancelarPresupuesto}>
-                          Cancelar
-                        </Button>
-                      )}
-                    </div>
-                  </form>
-                  <datalist id="presupuesto-categorias">
-                    {categoriasSugeridas.map((cat) => (
-                      <option key={cat} value={cat} />
-                    ))}
-                  </datalist>
-                  {presupuestoError && (
-                    <div className="text-xs text-red-600 mt-2">{presupuestoError}</div>
-                  )}
-                  {presupuestoOk && (
-                    <div className="text-xs text-emerald-600 mt-2">{presupuestoOk}</div>
-                  )}
-                </div>
-
-                <div className="app-panel p-3">
-                  <div className="text-sm text-slate-300 mb-2">Presupuestos del mes</div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-xs md:text-sm">
-                      <thead className="text-left text-slate-500">
-                        <tr>
-                          <th className="py-2 px-2">Tipo</th>
-                          <th className="py-2 px-2">Categoria</th>
-                          <th className="py-2 px-2 text-right">Monto</th>
-                          <th className="py-2 px-2 text-right">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-slate-200">
-                        {presupuestosMes.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="py-4 text-center text-slate-500">
-                              Sin presupuestos cargados.
-                            </td>
-                          </tr>
-                        )}
-                        {presupuestosMes.map((p) => (
-                          <tr key={p.id ?? `${p.tipo}-${p.categoria}`} className="border-t border-white/10 hover:bg-white/5">
-                            <td className="py-2 px-2 capitalize">{p.tipo}</td>
-                            <td className="py-2 px-2">{p.categoria}</td>
-                            <td className="py-2 px-2 text-right">
-                              {p.monto.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                            </td>
-                            <td className="py-2 px-2 text-right space-x-2">
-                              <button
-                                type="button"
-                                className="text-indigo-600 hover:text-indigo-500 text-xs"
-                                onClick={() => handleEditarPresupuesto(p)}
-                              >
-                                Editar
-                              </button>
-                              <button
-                                type="button"
-                                className="text-rose-600 hover:text-rose-500 text-xs"
-                                onClick={() => handleEliminarPresupuesto(p)}
-                              >
-                                Eliminar
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {tab === 'presupuestos' && <PresupuestosTab presupuestoCategorias={presupuestoCategorias} />}
 
         {tab === 'producto' && (
         <div className="app-card finance-card p-4">

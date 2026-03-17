@@ -1,18 +1,30 @@
-import { useEffect } from 'react';
 import AppRouter from './routes/AppRouter';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { LicenseProvider } from './context/LicenseContext';
+import { ToastProvider } from './context/ToastContext';
+import { ViewModeProvider } from './context/ViewModeContext';
+import { CompanyProvider } from './context/CompanyContext';
+import { queryClient } from './lib/queryClient';
 
 function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <LicenseProvider>
-          <AppRouter />
-        </LicenseProvider>
-      </AuthProvider>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <ViewModeProvider>
+          <AuthProvider>
+            <LicenseProvider>
+              <CompanyProvider>
+                <ToastProvider>
+                  <AppRouter />
+                </ToastProvider>
+              </CompanyProvider>
+            </LicenseProvider>
+          </AuthProvider>
+        </ViewModeProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
 

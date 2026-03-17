@@ -1,6 +1,17 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
+const DEFAULT_POOL_SIZE = 10;
+const DEFAULT_POOL_MAX_IDLE = 10;
+const DEFAULT_POOL_IDLE_TIMEOUT_MS = 60_000;
+const DEFAULT_POOL_CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_POOL_ACQUIRE_TIMEOUT_MS = 30_000;
+
+function toPositiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function parseDatabaseUrl(rawUrl) {
   if (!rawUrl) return null;
   let url;
@@ -21,6 +32,7 @@ function parseDatabaseUrl(rawUrl) {
 
 function resolveConfig() {
   const fromUrl = parseDatabaseUrl(process.env.DATABASE_URL || process.env.MYSQL_URL);
+  const connectionLimit = toPositiveNumber(process.env.DB_POOL_SIZE, DEFAULT_POOL_SIZE);
   return {
     host: fromUrl?.host || process.env.MYSQL_HOST || process.env.DB_HOST || '127.0.0.1',
     port: fromUrl?.port || Number(process.env.MYSQL_PORT || process.env.DB_PORT || 3306),
@@ -28,23 +40,138 @@ function resolveConfig() {
     password: fromUrl?.password || process.env.MYSQL_PASSWORD || process.env.DB_PASSWORD || '',
     database: fromUrl?.database || process.env.MYSQL_DATABASE || process.env.DB_NAME || 'sistema_gestion',
     waitForConnections: true,
-    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+    connectionLimit,
+    maxIdle: toPositiveNumber(process.env.DB_POOL_MAX_IDLE, connectionLimit || DEFAULT_POOL_MAX_IDLE),
+    idleTimeout: toPositiveNumber(
+      process.env.DB_POOL_IDLE_TIMEOUT_MS,
+      DEFAULT_POOL_IDLE_TIMEOUT_MS
+    ),
     queueLimit: 0,
     decimalNumbers: true,
     supportBigNumbers: true,
     bigNumberStrings: false,
     timezone: 'Z',
+    enableKeepAlive: process.env.DB_KEEPALIVE !== 'false',
+    keepAliveInitialDelay: toPositiveNumber(
+      process.env.DB_KEEPALIVE_INITIAL_DELAY_MS,
+      10_000
+    ),
+    connectTimeout: toPositiveNumber(
+      process.env.DB_CONNECT_TIMEOUT_MS,
+      DEFAULT_POOL_CONNECT_TIMEOUT_MS
+    ),
     multipleStatements: true,
   };
 }
 
+function resolveAcquireTimeoutMs() {
+  return toPositiveNumber(
+    process.env.DB_ACQUIRE_TIMEOUT_MS,
+    DEFAULT_POOL_ACQUIRE_TIMEOUT_MS
+  );
+}
+
 let mysqlPool = global._mysqlPool || null;
+let poolMetadata = global._mysqlPoolMetadata || null;
+
+function attachPoolMetadata(pool) {
+  const metadata = {
+    created_at: new Date().toISOString(),
+    acquire_timeout_ms: resolveAcquireTimeoutMs(),
+  };
+
+  if (typeof pool?.on === 'function') {
+    pool.on('connection', () => {
+      metadata.last_connection_at = new Date().toISOString();
+    });
+    pool.on('acquire', () => {
+      metadata.last_acquire_at = new Date().toISOString();
+    });
+    pool.on('release', () => {
+      metadata.last_release_at = new Date().toISOString();
+    });
+    pool.on('enqueue', () => {
+      metadata.last_enqueue_at = new Date().toISOString();
+    });
+  }
+
+  poolMetadata = metadata;
+  global._mysqlPoolMetadata = metadata;
+}
 
 function ensurePool() {
   if (mysqlPool) return mysqlPool;
   mysqlPool = mysql.createPool(resolveConfig());
   global._mysqlPool = mysqlPool;
+  attachPoolMetadata(mysqlPool);
   return mysqlPool;
+}
+
+function getRawPool(pool) {
+  return pool?.pool || pool || null;
+}
+
+function getPoolStats() {
+  const pool = ensurePool();
+  const rawPool = getRawPool(pool);
+  const cfg = pool.config || rawPool?.config || {};
+
+  return {
+    created_at: poolMetadata?.created_at || null,
+    last_connection_at: poolMetadata?.last_connection_at || null,
+    last_acquire_at: poolMetadata?.last_acquire_at || null,
+    last_release_at: poolMetadata?.last_release_at || null,
+    last_enqueue_at: poolMetadata?.last_enqueue_at || null,
+    acquire_timeout_ms: poolMetadata?.acquire_timeout_ms || resolveAcquireTimeoutMs(),
+    wait_for_connections: Boolean(cfg.waitForConnections),
+    connection_limit: Number(cfg.connectionLimit || cfg.connection_limit || 0),
+    queue_limit: Number(cfg.queueLimit || cfg.queue_limit || 0),
+    max_idle: Number(cfg.maxIdle || cfg.max_idle || 0),
+    idle_timeout_ms: Number(cfg.idleTimeout || cfg.idle_timeout || 0),
+    open_connections: Array.isArray(rawPool?._allConnections)
+      ? rawPool._allConnections.length
+      : null,
+    idle_connections: Array.isArray(rawPool?._freeConnections)
+      ? rawPool._freeConnections.length
+      : null,
+    queued_requests: Array.isArray(rawPool?._connectionQueue)
+      ? rawPool._connectionQueue.length
+      : null,
+  };
+}
+
+async function getConnectionWithTimeout(pool) {
+  const acquireTimeoutMs = resolveAcquireTimeoutMs();
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      reject(
+        new Error(
+          `DB acquire timeout after ${acquireTimeoutMs}ms; no connection available in pool`
+        )
+      );
+    }, acquireTimeoutMs);
+
+    pool
+      .getConnection()
+      .then((conn) => {
+        if (settled) {
+          conn.release();
+          return;
+        }
+        clearTimeout(timer);
+        settled = true;
+        resolve(conn);
+      })
+      .catch((err) => {
+        if (settled) return;
+        clearTimeout(timer);
+        settled = true;
+        reject(err);
+      });
+  });
 }
 
 function normalizeParam(value) {
@@ -203,6 +330,7 @@ async function buildReturningRows(conn, sql, returning, boundParams, packet) {
   if (!fields.length) return [];
   const command = String(sql || '').trim().split(/\s+/)[0]?.toLowerCase();
   const table = parseTableName(sql, command);
+  const affected = Number(packet?.affectedRows || 0);
 
   if (command === 'insert') {
     const insertId = Number(packet?.insertId || 0) || null;
@@ -221,6 +349,7 @@ async function buildReturningRows(conn, sql, returning, boundParams, packet) {
   }
 
   if (command === 'update' || command === 'delete') {
+    if (affected <= 0) return [];
     const idGuess = boundParams?.length ? boundParams[boundParams.length - 1] : null;
     if (fields.length === 1 && fields[0] === '*' && command === 'update') {
       const row = await selectById(conn, table, idGuess);
@@ -279,7 +408,17 @@ async function queryInternal(conn, text, params) {
 
 async function query(text, params) {
   const pool = ensurePool();
-  return queryInternal(pool, text, params);
+  const conn = await getConnectionWithTimeout(pool);
+  try {
+    return await queryInternal(conn, text, params);
+  } finally {
+    conn.release();
+  }
+}
+
+async function ping() {
+  await query('SELECT 1 AS ok');
+  return true;
 }
 
 function createClient(conn) {
@@ -293,7 +432,7 @@ function createClient(conn) {
 
 async function withTransaction(fn) {
   const pool = ensurePool();
-  const conn = await pool.getConnection();
+  const conn = await getConnectionWithTimeout(pool);
   try {
     await conn.beginTransaction();
     const client = createClient(conn);
@@ -316,7 +455,7 @@ const pool = {
   query: (text, params) => query(text, params),
   async connect() {
     const p = ensurePool();
-    const conn = await p.getConnection();
+    const conn = await getConnectionWithTimeout(p);
     return createClient(conn);
   },
   async end() {
@@ -324,6 +463,8 @@ const pool = {
       await mysqlPool.end();
       mysqlPool = null;
       global._mysqlPool = null;
+      poolMetadata = null;
+      global._mysqlPoolMetadata = null;
     }
   },
   async reconnect() {
@@ -344,7 +485,14 @@ module.exports = {
   pool,
   query,
   withTransaction,
+  ping,
+  getPoolStats,
   backupTo,
   restoreFrom,
   dbPath: null,
+  __test__: {
+    splitReturningFields,
+    fieldAlias,
+    buildReturningRows,
+  },
 };

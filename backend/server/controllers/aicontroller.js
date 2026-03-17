@@ -1,4 +1,5 @@
 const ai = require('../services/aiService');
+const logger = require('../lib/logger');
 
 async function forecast(req, res) {
   try {
@@ -160,7 +161,7 @@ async function predictionsSummary(req, res) {
     const narrative = await llm.generatePredictionsNarrative({ data });
     res.json({ narrative, data });
   } catch (e) {
-    console.error('[ai] predictionsSummary error:', e);
+    logger.error({ err: e }, '[ai] predictionsSummary error:');
     if (e && typeof e.message === 'string' && e.message.includes('No AI provider available')) {
       return res.status(503).json({ error: 'No hay proveedor de IA disponible' });
     }

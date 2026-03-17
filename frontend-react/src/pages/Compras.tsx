@@ -2,9 +2,12 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Api } from '../lib/api';
 import Alert from '../components/Alert';
+import SpreadsheetImportPanel from '../components/SpreadsheetImportPanel';
+import VirtualizedTable from '../components/VirtualizedTable';
 import { useAuth } from '../context/AuthContext';
 import { getRoleFromToken } from '../lib/auth';
 import ProductPicker from '../components/ProductPicker';
+import { useCompraDetalle, useComprasList } from '../hooks/queries/useCompras';
 
 type Producto = {
   id: number;
@@ -91,10 +94,42 @@ function toNumber(value: string) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function mapCompraRow(row: any): CompraRow {
+  return {
+    id: Number(row.id),
+    proveedor_nombre: row.proveedor_nombre,
+    fecha: row.fecha,
+    total_costo: Number(row.total_costo ?? 0),
+    moneda: row.moneda || 'ARS',
+    estado: row.estado || 'pendiente',
+    estado_recepcion: row.estado_recepcion,
+    oc_numero: row.oc_numero ?? null,
+    adjunto_url: row.adjunto_url ?? null,
+    total_cantidad: row.total_cantidad ? Number(row.total_cantidad) : 0,
+    total_recibida: row.total_recibida ? Number(row.total_recibida) : 0,
+  };
+}
+
+function mapCompraDetalleRow(row: any, monedaFallback: string): CompraDetalleItem {
+  return {
+    id: Number(row.id),
+    producto_id: Number(row.producto_id),
+    producto_nombre: row.producto_nombre,
+    cantidad: Number(row.cantidad || 0),
+    cantidad_recibida: Number(row.cantidad_recibida || 0),
+    costo_unitario: Number(row.costo_unitario || 0),
+    costo_envio: Number(row.costo_envio || 0),
+    subtotal: Number(row.subtotal || 0),
+    moneda: row.moneda || monedaFallback,
+    tipo_cambio: row.tipo_cambio ? Number(row.tipo_cambio) : null,
+  };
+}
+
 export default function Compras() {
   const { accessToken } = useAuth();
   const role = useMemo(() => getRoleFromToken(accessToken), [accessToken]);
   const canManagePurchases = role === 'admin' || role === 'gerente';
+  const comprasQuery = useComprasList<any>({}, true);
 
   const [productos, setProductos] = useState<Producto[]>([]);
   const [loadingProductos, setLoadingProductos] = useState(true);
@@ -123,6 +158,10 @@ export default function Compras() {
   const [recepcionItems, setRecepcionItems] = useState<RecepcionItem[]>([]);
   const [recepcionNotas, setRecepcionNotas] = useState('');
   const [recepcionSubmitting, setRecepcionSubmitting] = useState(false);
+  const detalleQuery = useCompraDetalle(
+    selectedCompra ? Number(selectedCompra.id) : null,
+    Boolean(selectedCompra),
+  );
 
   const fx = useMemo(() => {
     if (moneda === 'ARS') return null;
@@ -217,29 +256,16 @@ export default function Compras() {
   }
 
   async function loadCompras() {
-    setLoadingCompras(true);
     try {
-      const data = await Api.compras();
-      const mapped = (data || []).map((r: any) => ({
-        id: r.id,
-        proveedor_nombre: r.proveedor_nombre,
-        fecha: r.fecha,
-        total_costo: Number(r.total_costo ?? 0),
-        moneda: r.moneda || 'ARS',
-        estado: r.estado || 'pendiente',
-        estado_recepcion: r.estado_recepcion,
-        oc_numero: r.oc_numero ?? null,
-        adjunto_url: r.adjunto_url ?? null,
-        total_cantidad: r.total_cantidad ? Number(r.total_cantidad) : 0,
-        total_recibida: r.total_recibida ? Number(r.total_recibida) : 0,
-      }));
+      const response = await comprasQuery.refetch();
+      const mapped = Array.isArray(response.data)
+        ? response.data.map(mapCompraRow)
+        : [];
       setCompras(mapped);
       return mapped;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error cargando compras');
       return [];
-    } finally {
-      setLoadingCompras(false);
     }
   }
 
@@ -277,10 +303,21 @@ export default function Compras() {
   useEffect(() => {
     loadProductos();
     loadProveedores();
-    loadCompras();
     loadDepositos();
     loadDolarBlue();
   }, []);
+
+  useEffect(() => {
+    setLoadingCompras(comprasQuery.isLoading || comprasQuery.isFetching);
+    if (comprasQuery.isError) {
+      setError('Error cargando compras');
+      return;
+    }
+    const rows = Array.isArray(comprasQuery.data)
+      ? comprasQuery.data.map(mapCompraRow)
+      : [];
+    setCompras(rows);
+  }, [comprasQuery.data, comprasQuery.isError, comprasQuery.isFetching, comprasQuery.isLoading]);
 
   useEffect(() => {
     if (moneda === 'ARS') {
@@ -291,6 +328,46 @@ export default function Compras() {
       setTipoCambio(String(dolarBlue));
     }
   }, [moneda, dolarBlue, tipoCambio]);
+
+  useEffect(() => {
+    setLoadingDetalle(detalleQuery.isLoading || detalleQuery.isFetching);
+    if (!selectedCompra) {
+      setDetalleCompra([]);
+      setRecepcionItems([]);
+      return;
+    }
+    if (detalleQuery.isError) {
+      setError('No se pudo cargar el detalle');
+      setDetalleCompra([]);
+      setRecepcionItems([]);
+      return;
+    }
+    const mapped = Array.isArray(detalleQuery.data)
+      ? detalleQuery.data.map((row: any) =>
+          mapCompraDetalleRow(row, selectedCompra.moneda),
+        )
+      : [];
+    setDetalleCompra(mapped);
+    setRecepcionItems(
+      mapped
+        .map((item) => {
+          const pendiente = Math.max(0, item.cantidad - item.cantidad_recibida);
+          return {
+            producto_id: item.producto_id,
+            producto_nombre: item.producto_nombre,
+            pendiente,
+            cantidad_recibir: pendiente > 0 ? String(pendiente) : '0',
+          };
+        })
+        .filter((item) => item.pendiente > 0),
+    );
+  }, [
+    detalleQuery.data,
+    detalleQuery.isError,
+    detalleQuery.isFetching,
+    detalleQuery.isLoading,
+    selectedCompra,
+  ]);
 
   function updateItem(id: string, patch: Partial<CompraItem>) {
     setItems((prev) =>
@@ -307,39 +384,6 @@ export default function Compras() {
 
   async function loadDetalle(compra: CompraRow) {
     setSelectedCompra(compra);
-    setLoadingDetalle(true);
-    try {
-      const data = await Api.compraDetalle(compra.id);
-      const mapped = (data || []).map((d: any) => ({
-        id: d.id,
-        producto_id: d.producto_id,
-        producto_nombre: d.producto_nombre,
-        cantidad: Number(d.cantidad || 0),
-        cantidad_recibida: Number(d.cantidad_recibida || 0),
-        costo_unitario: Number(d.costo_unitario || 0),
-        costo_envio: Number(d.costo_envio || 0),
-        subtotal: Number(d.subtotal || 0),
-        moneda: d.moneda || compra.moneda,
-        tipo_cambio: d.tipo_cambio ? Number(d.tipo_cambio) : null,
-      }));
-      setDetalleCompra(mapped);
-      const recepcion = mapped
-        .map((item: CompraDetalleItem) => {
-          const pendiente = Math.max(0, item.cantidad - item.cantidad_recibida);
-          return {
-            producto_id: item.producto_id,
-            producto_nombre: item.producto_nombre,
-            pendiente,
-            cantidad_recibir: pendiente > 0 ? String(pendiente) : '0',
-          };
-        })
-        .filter((item: RecepcionItem) => item.pendiente > 0);
-      setRecepcionItems(recepcion);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo cargar el detalle');
-    } finally {
-      setLoadingDetalle(false);
-    }
   }
 
   async function onSubmit(e: FormEvent) {
@@ -461,6 +505,33 @@ export default function Compras() {
             message="Configura el tipo de cambio para poder convertir la compra a pesos."
           />
         )}
+
+        <SpreadsheetImportPanel
+          title="Importar compras desde Excel"
+          description="Agrupa filas por compra, valida proveedor y producto, y puede procesar archivos grandes en segundo plano con seguimiento de progreso."
+          templateName="plantilla-compras.csv"
+          templateHeaders={[
+            'compra_ref',
+            'proveedor',
+            'producto_codigo',
+            'fecha',
+            'moneda',
+            'cantidad',
+            'costo_unitario',
+            'tipo_cambio',
+            'oc_numero',
+            'adjunto_url',
+          ]}
+          upload={(file, opts) =>
+            Api.importarComprasExcel(file, {
+              dryRun: opts?.dryRun,
+              async: opts?.async,
+            })
+          }
+          onCompleted={async () => {
+            await Promise.all([comprasQuery.refetch(), loadProductos()]);
+          }}
+        />
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -736,51 +807,56 @@ export default function Compras() {
               Sin compras registradas.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-xs md:text-sm">
-                <thead className="text-left text-slate-400">
-                  <tr>
-                    <th className="py-1 pr-2">ID</th>
-                    <th className="py-1 pr-2">Fecha</th>
-                    <th className="py-1 pr-2">Proveedor</th>
-                    <th className="py-1 pr-2">Total</th>
-                    <th className="py-1 pr-2">Moneda</th>
-                    <th className="py-1 pr-2">Estado</th>
-                    <th className="py-1 pr-2">Accion</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-200">
-                  {compras.map((c) => (
-                    <tr
-                      key={c.id}
-                      className="border-t border-white/10 hover:bg-white/5"
+            <VirtualizedTable
+              items={compras}
+              rowKey={(compra) => compra.id}
+              maxHeight={420}
+              estimateSize={46}
+              tableClassName="min-w-full text-xs md:text-sm"
+              renderHeader={() => (
+                <tr>
+                  <th className="py-1 pr-2">ID</th>
+                  <th className="py-1 pr-2">Fecha</th>
+                  <th className="py-1 pr-2">Proveedor</th>
+                  <th className="py-1 pr-2">Total</th>
+                  <th className="py-1 pr-2">Moneda</th>
+                  <th className="py-1 pr-2">Estado</th>
+                  <th className="py-1 pr-2">Accion</th>
+                </tr>
+              )}
+              renderRow={(compra) => (
+                <>
+                  <td className="py-1 pr-2">{compra.id}</td>
+                  <td className="py-1 pr-2">
+                    {compra.fecha ? new Date(compra.fecha).toLocaleString() : '-'}
+                  </td>
+                  <td className="py-1 pr-2">{compra.proveedor_nombre}</td>
+                  <td className="py-1 pr-2">
+                    {Number(compra.total_costo || 0).toFixed(2)} {compra.moneda}
+                  </td>
+                  <td className="py-1 pr-2">{compra.moneda}</td>
+                  <td className="py-1 pr-2 capitalize">
+                    {compra.estado_recepcion || compra.estado}
+                  </td>
+                  <td className="py-1 pr-2">
+                    <button
+                      type="button"
+                      className="text-xs text-cyan-200 hover:text-cyan-100"
+                      onClick={() => loadDetalle(compra)}
                     >
-                      <td className="py-1 pr-2">{c.id}</td>
-                      <td className="py-1 pr-2">
-                        {c.fecha ? new Date(c.fecha).toLocaleString() : '-'}
-                      </td>
-                      <td className="py-1 pr-2">{c.proveedor_nombre}</td>
-                      <td className="py-1 pr-2">
-                        {Number(c.total_costo || 0).toFixed(2)} {c.moneda}
-                      </td>
-                      <td className="py-1 pr-2">{c.moneda}</td>
-                      <td className="py-1 pr-2 capitalize">
-                        {c.estado_recepcion || c.estado}
-                      </td>
-                      <td className="py-1 pr-2">
-                        <button
-                          type="button"
-                          className="text-xs text-cyan-200 hover:text-cyan-100"
-                          onClick={() => loadDetalle(c)}
-                        >
-                          Ver detalle
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      Ver detalle
+                    </button>
+                  </td>
+                </>
+              )}
+              emptyState={
+                <tr>
+                  <td className="py-3 text-slate-400" colSpan={7}>
+                    Sin compras registradas.
+                  </td>
+                </tr>
+              }
+            />
           )}
         </div>
 

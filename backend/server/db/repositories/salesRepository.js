@@ -52,6 +52,26 @@ function normalizePriceListType(value) {
   return 'local';
 }
 
+function resolveUnitPriceByList(product, priceListType) {
+  const base = Number(product?.price || 0);
+  const local = Number(product?.price_local || 0);
+  const distribuidor = Number(product?.price_distribuidor || 0);
+  const finalPrice = Number(product?.precio_final || 0);
+
+  const candidates =
+    priceListType === 'final'
+      ? [finalPrice, local, distribuidor, base]
+      : priceListType === 'distribuidor'
+      ? [distribuidor, local, finalPrice, base]
+      : [local, distribuidor, finalPrice, base];
+
+  for (const candidate of candidates) {
+    const n = Number(candidate || 0);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
 function toComparableDate(value) {
   if (!value) return null;
   const d = value instanceof Date ? value : new Date(value);
@@ -76,9 +96,18 @@ function resolveOfferForLine({ line, offers, priceListType, saleDate }) {
     const tipo = String(offer.tipo_oferta || '').trim().toLowerCase();
     const lista = String(offer.lista_precio_objetivo || 'todas').trim().toLowerCase();
     const productoId = offer.producto_id ? Number(offer.producto_id) : null;
+    const productoIds = Array.isArray(offer.producto_ids)
+      ? offer.producto_ids
+          .map((value) => Number(value))
+          .filter((n) => Number.isInteger(n) && n > 0)
+      : [];
     const descuentoPct = Number(offer.descuento_pct || 0);
     if (!Number.isFinite(descuentoPct) || descuentoPct <= 0) continue;
-    if (productoId && Number(line.producto.id) !== productoId) continue;
+    if (productoIds.length) {
+      if (!productoIds.includes(Number(line.producto.id))) continue;
+    } else if (productoId && Number(line.producto.id) !== productoId) {
+      continue;
+    }
     if (lista !== 'todas' && lista !== priceListType) continue;
     if (tipo === 'cantidad') {
       const minQty = Math.max(1, Number(offer.cantidad_minima || 1));
@@ -115,21 +144,33 @@ async function createVenta({
   referido_codigo,
   caja_tipo,
   price_list_type,
+  allow_custom_unit_price = false,
 }) {
   return withTransaction(async (client) => {
     const ventaFecha = normalizeVentaFecha(fecha);
 
     // Validate cliente
-    const c = await client.query('SELECT id, estado FROM clientes WHERE id = $1', [cliente_id]);
+    const c = await client.query(
+      'SELECT id, estado, deleted_at FROM clientes WHERE id = $1',
+      [cliente_id]
+    );
     if (!c.rowCount) {
       const e = new Error('Cliente no encontrado');
       e.status = 400;
+      e.code = 'CLIENTE_NO_ENCONTRADO';
       throw e;
     }
     const cliente = c.rows[0];
+    if (cliente.deleted_at) {
+      const e = new Error('Cliente no encontrado');
+      e.status = 400;
+      e.code = 'CLIENTE_NO_ENCONTRADO';
+      throw e;
+    }
     if (cliente.estado !== 'activo') {
       const e = new Error('El cliente est\u00e1 inactivo');
       e.status = 400;
+      e.code = 'CLIENTE_INACTIVO';
       throw e;
     }
     // Load and lock inventory for items
@@ -158,7 +199,8 @@ async function createVenta({
               p.comision_pct::float AS comision_pct,
               p.precio_costo_pesos::float AS costo_pesos,
               p.precio_costo_dolares::float AS costo_dolares,
-              p.tipo_cambio::float AS tipo_cambio
+              p.tipo_cambio::float AS tipo_cambio,
+              p.deleted_at
          FROM productos p
         WHERE p.id IN (${productPlaceholders})`,
       uniqueIds
@@ -173,23 +215,68 @@ async function createVenta({
     const isReserva = Boolean(es_reserva);
     const selectedPriceListType = normalizePriceListType(price_list_type);
 
-    const offersPromise = client
-      .query(
-        `SELECT id,
-                tipo_oferta,
-                producto_id,
-                lista_precio_objetivo,
-                cantidad_minima,
-                descuento_pct,
-                fecha_desde,
-                fecha_hasta,
-                prioridad,
-                activo
-           FROM ofertas_precios
-          WHERE activo = 1`
-      )
-      .then((r) => r.rows || [])
-      .catch(() => []);
+    const offersPromise = (async () => {
+      try {
+        const { rows: baseOffers } = await client.query(
+          `SELECT id,
+                  tipo_oferta,
+                  producto_id,
+                  lista_precio_objetivo,
+                  cantidad_minima,
+                  descuento_pct,
+                  fecha_desde,
+                  fecha_hasta,
+                  prioridad,
+                  activo
+             FROM ofertas_precios
+            WHERE activo = 1`
+        );
+        const offers = baseOffers || [];
+        const offerIds = Array.from(
+          new Set(
+            offers
+              .map((offer) => Number(offer.id))
+              .filter((n) => Number.isInteger(n) && n > 0)
+          )
+        );
+        if (!offerIds.length) return offers;
+
+        try {
+          const marks = offerIds.map((_, idx) => `$${idx + 1}`).join(', ');
+          const { rows: mappedRows } = await client.query(
+            `SELECT oferta_id, producto_id
+               FROM ofertas_precios_productos
+              WHERE oferta_id IN (${marks})
+              ORDER BY oferta_id ASC, producto_id ASC`,
+            offerIds
+          );
+          const productIdsByOfferId = new Map();
+          for (const row of mappedRows || []) {
+            const offerId = Number(row.oferta_id);
+            const productId = Number(row.producto_id);
+            if (!Number.isInteger(offerId) || offerId <= 0) continue;
+            if (!Number.isInteger(productId) || productId <= 0) continue;
+            if (!productIdsByOfferId.has(offerId)) productIdsByOfferId.set(offerId, []);
+            const list = productIdsByOfferId.get(offerId);
+            if (!list.includes(productId)) list.push(productId);
+          }
+          return offers.map((offer) => ({
+            ...offer,
+            producto_ids: productIdsByOfferId.get(Number(offer.id)) || [],
+          }));
+        } catch {
+          return offers.map((offer) => ({
+            ...offer,
+            producto_ids:
+              offer.producto_id && Number.isInteger(Number(offer.producto_id))
+                ? [Number(offer.producto_id)]
+                : [],
+          }));
+        }
+      } catch {
+        return [];
+      }
+    })();
     const commissionConfigPromise = pricingRepo.getCommissionConfig().catch(() => ({
       mode: 'producto',
       porcentajes: { local: 0, distribuidor: 0, final: 0, oferta: 0 },
@@ -200,9 +287,26 @@ async function createVenta({
     let total = 0;
     for (const it of items) {
       const p = byId.get(Number(it.producto_id));
-      if (!p) { const e = new Error(`Producto ${it.producto_id} inexistente`); e.status = 400; throw e; }
+      if (!p || p.deleted_at) {
+        const e = new Error(`Producto ${it.producto_id} inexistente`);
+        e.status = 400;
+        e.code = 'PRODUCTO_NO_ENCONTRADO';
+        throw e;
+      }
       const qty = Number(it.cantidad) || 0;
-      const unitPrice = Number(it.precio_unitario) || p.price;
+      const requestedUnitPrice = Number(it.precio_unitario);
+      const unitPrice =
+        allow_custom_unit_price && Number.isFinite(requestedUnitPrice) && requestedUnitPrice > 0
+          ? requestedUnitPrice
+          : resolveUnitPriceByList(p, selectedPriceListType);
+      if (!(unitPrice > 0)) {
+        const e = new Error(
+          `Producto ${it.producto_id} sin precio valido para la lista ${selectedPriceListType}`
+        );
+        e.status = 400;
+        e.code = 'PRECIO_INVALIDO';
+        throw e;
+      }
       const subtotal = unitPrice * qty;
       total += subtotal;
       preparedItems.push({
@@ -279,6 +383,7 @@ async function createVenta({
             `Stock insuficiente para producto ${prodId} (disp ${available}, req ${qty}). Usa reserva si corresponde.`
           );
           e.status = 409;
+          e.code = 'STOCK_INSUFICIENTE';
           throw e;
         }
       }
@@ -410,6 +515,7 @@ async function createVenta({
       neto,
       descuento_ofertas: totalOfferDiscount,
       comision_mode: String(commissionConfig?.mode || 'producto').trim().toLowerCase(),
+      es_reserva: isReserva,
     };
   });
 }

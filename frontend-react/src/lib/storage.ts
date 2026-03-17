@@ -68,11 +68,23 @@ export function getStoredApiBase(): string | null {
 
 export function getApiBase(): string {
   const stored = getStoredApiBase();
-  if (stored) return stored;
+  if (stored) {
+    const isHttpsPage =
+      typeof window !== 'undefined' && window.location.protocol === 'https:';
+    if (!(isHttpsPage && /^http:\/\//i.test(stored))) {
+      return stored;
+    }
+  }
   const envBase =
     import.meta.env.VITE_API_URL?.replace(/\/$/, '') ||
     import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
-  if (envBase) return envBase;
+  if (envBase) {
+    const isHttpsPage =
+      typeof window !== 'undefined' && window.location.protocol === 'https:';
+    if (!(isHttpsPage && /^http:\/\//i.test(envBase))) {
+      return envBase;
+    }
+  }
   const isFile =
     typeof window !== 'undefined' && window.location.protocol === 'file:';
   return isFile ? 'http://127.0.0.1:3000' : '';

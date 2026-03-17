@@ -1,5 +1,6 @@
 const { query } = require('../db/pg');
 const llm = require('../services/llmService');
+const logger = require('../lib/logger');
 const ai = require('../services/aiService');
 
 async function crmSuggestion(req, res) {
@@ -59,7 +60,7 @@ async function crmSuggestion(req, res) {
 
     return res.json({ suggestion });
   } catch (err) {
-    console.error('Error en crmSuggestion:', err);
+    logger.error({ err: err }, 'Error en crmSuggestion:');
     return res.status(500).json({ error: 'No se pudo generar la sugerencia con IA' });
   }
 }
@@ -116,7 +117,7 @@ async function ticketReply(req, res) {
 
     return res.json({ reply });
   } catch (err) {
-    console.error('Error en ticketReply:', err);
+    logger.error({ err: err }, 'Error en ticketReply:');
     return res.status(500).json({ error: 'No se pudo generar la respuesta con IA' });
   }
 }
@@ -196,7 +197,7 @@ async function explainForecast(req, res) {
 
     return res.json({ explanation });
   } catch (err) {
-    console.error('Error en explainForecast:', err);
+    logger.error({ err: err }, 'Error en explainForecast:');
     if (err && typeof err.message === 'string' && err.message.includes('No AI provider available')) {
       return res
         .status(503)

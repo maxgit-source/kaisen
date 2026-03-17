@@ -4,6 +4,7 @@ const ctrl = require('../controllers/marketplacecontroller');
 const auth = require('../middlewares/authmiddleware');
 const { requireRole } = require('../middlewares/roleMiddleware');
 const { requireFeature } = require('../middlewares/licenseMiddleware');
+const { exportLimiter } = require('../middlewares/security');
 
 // Pymes aliadas
 router.get('/marketplace/pymes', auth, requireFeature('marketplace'), requireRole(['admin', 'gerente']), ctrl.listPymes);
@@ -30,7 +31,7 @@ router.post('/marketplace/referidos/validar', auth, requireFeature('marketplace'
 router.get('/marketplace/reportes/alianzas', auth, requireFeature('marketplace'), requireRole(['admin', 'gerente']), ctrl.reportAlianzas);
 
 // Sync offline
-router.get('/marketplace/sync/export', auth, requireFeature('marketplace'), requireRole(['admin', 'gerente']), ctrl.exportSync);
-router.post('/marketplace/sync/import', auth, requireFeature('marketplace'), requireRole(['admin', 'gerente']), ctrl.importSync);
+router.get('/marketplace/sync/export', exportLimiter, auth, requireFeature('marketplace'), requireRole(['admin', 'gerente']), ctrl.exportSync);
+router.post('/marketplace/sync/import', exportLimiter, auth, requireFeature('marketplace'), requireRole(['admin', 'gerente']), ctrl.importSync);
 
 module.exports = router;

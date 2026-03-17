@@ -12,8 +12,9 @@ async function upsertConfig(data) {
       `INSERT INTO arca_config(
         cuit, razon_social, condicion_iva, domicilio_fiscal, provincia, localidad, codigo_postal,
         ambiente, certificado_pem, clave_privada_pem, passphrase_enc, certificado_vto,
-        permitir_sin_entrega, permitir_sin_pago, precios_incluyen_iva, activo
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        permitir_sin_entrega, permitir_sin_pago, precios_incluyen_iva, activo,
+        default_tipo_comprobante, alicuotas_iva_json, certificado_nombre_archivo, p12_subido_en
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       RETURNING *`,
       [
         data.cuit,
@@ -32,6 +33,10 @@ async function upsertConfig(data) {
         data.permitir_sin_pago ? 1 : 0,
         data.precios_incluyen_iva != null ? (data.precios_incluyen_iva ? 1 : 0) : 1,
         data.activo != null ? (data.activo ? 1 : 0) : 1,
+        data.default_tipo_comprobante || null,
+        data.alicuotas_iva_json || null,
+        data.certificado_nombre_archivo || null,
+        data.p12_subido_en || null,
       ]
     );
     return rows[0];
@@ -57,6 +62,10 @@ async function upsertConfig(data) {
     permitir_sin_pago: 'permitir_sin_pago',
     precios_incluyen_iva: 'precios_incluyen_iva',
     activo: 'activo',
+    default_tipo_comprobante: 'default_tipo_comprobante',
+    alicuotas_iva_json: 'alicuotas_iva_json',
+    certificado_nombre_archivo: 'certificado_nombre_archivo',
+    p12_subido_en: 'p12_subido_en',
   })) {
     if (Object.prototype.hasOwnProperty.call(data, key)) {
       sets.push(`${col} = $${p++}`);

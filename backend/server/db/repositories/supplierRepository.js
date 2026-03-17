@@ -47,5 +47,26 @@ async function update(id, fields) {
   return rows[0] || null;
 }
 
-module.exports = { list, create, update };
+async function findById(id) {
+  const { rows } = await query(
+    `SELECT id, nombre, email, telefono, direccion, cuit_cuil
+       FROM proveedores
+      WHERE id = $1
+      LIMIT 1`,
+    [id]
+  );
+  return rows[0] || null;
+}
 
+async function findByExactName(nombre) {
+  const { rows } = await query(
+    `SELECT id, nombre, email, telefono, direccion, cuit_cuil
+       FROM proveedores
+      WHERE LOWER(nombre) = LOWER($1)
+      LIMIT 1`,
+    [nombre]
+  );
+  return rows[0] || null;
+}
+
+module.exports = { list, create, update, findById, findByExactName };

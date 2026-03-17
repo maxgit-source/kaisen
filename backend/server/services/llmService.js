@@ -1,6 +1,12 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const {
+  GeminiModelResolver,
+  extractGeminiErrorMessage,
+  isGeminiModelNotFoundError,
+  normalizeGeminiModelName,
+} = require('../lib/geminiModelResolver');
 
 const AI_ENABLED = process.env.AI_LLM_ENABLED === 'true';
 const PROVIDER_ORDER = (process.env.AI_PROVIDER_ORDER || 'openai,gemini,deepseek,local')
@@ -14,6 +20,10 @@ const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || process.env.LOCAL_AI_
 const LOCAL_AI_MODEL = process.env.LOCAL_AI_MODEL;
 
 const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 15000);
+const geminiModelResolver = new GeminiModelResolver({
+  apiKey: process.env.GEMINI_API_KEY,
+  timeoutMs: Math.min(TIMEOUT_MS, 15000),
+});
 
 function withTimeout(promise, ms = TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
@@ -121,22 +131,57 @@ async function callGemini({ messages, model = GEMINI_MODEL, maxTokens = 512 }) {
     },
   });
 
-  // Usar la API v1 (modelos 1.5 requieren v1, no v1beta)
-  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
+  async function resolveTargetModel(preferredModel, { forceRefresh = false } = {}) {
+    const normalizedPreferred =
+      normalizeGeminiModelName(preferredModel) ||
+      normalizeGeminiModelName(GEMINI_MODEL) ||
+      'gemini-pro';
 
-  const res = await withTimeout(
-    httpRequest(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-      body,
-    })
-  );
+    try {
+      return await geminiModelResolver.resolveModel({
+        preferredModel: normalizedPreferred,
+        forceRefresh,
+      });
+    } catch {
+      return normalizedPreferred;
+    }
+  }
+
+  async function requestGemini(targetModel) {
+    return withTimeout(
+      httpRequest(`https://generativelanguage.googleapis.com/v1/models/${targetModel}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+        body,
+      })
+    );
+  }
+
+  let targetModel = await resolveTargetModel(model);
+  let res = await requestGemini(targetModel);
 
   if (!res.ok) {
-    throw new Error(`Gemini error: ${res.status} ${res.text || ''}`.trim());
+    let errMsg = extractGeminiErrorMessage(res.text, res.status);
+
+    if (isGeminiModelNotFoundError(errMsg)) {
+      geminiModelResolver.invalidate(targetModel);
+
+      const retryModel = await resolveTargetModel('', { forceRefresh: true });
+      if (retryModel && retryModel !== targetModel) {
+        res = await requestGemini(retryModel);
+        targetModel = retryModel;
+        if (!res.ok) {
+          errMsg = extractGeminiErrorMessage(res.text, res.status);
+        }
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(errMsg);
+    }
   }
 
   const data = JSON.parse(res.text || '{}');

@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const logger = require('../lib/logger');
 const { body, validationResult } = require('express-validator');
 const { withTransaction } = require('../db/pg');
 const users = require('../db/repositories/userRepository');
@@ -76,7 +77,7 @@ async function createAdmin(req, res) {
 
     return res.status(201).json({ ok: true });
   } catch (e) {
-    console.error('Setup admin error:', e.message);
+    logger.error({ err: e.message }, 'Setup admin error:');
     return res.status(500).json({ error: 'No se pudo crear el admin' });
   }
 }

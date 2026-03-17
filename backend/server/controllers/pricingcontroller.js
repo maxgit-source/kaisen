@@ -5,10 +5,32 @@ const repo = require('../db/repositories/pricingRepository');
 const OFFER_TYPES = ['cantidad', 'fecha'];
 const OFFER_PRICE_LISTS = ['local', 'distribuidor', 'final', 'todas'];
 
-function parseOptionalId(raw) {
-  if (raw == null || raw === '') return null;
-  const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
+function parseOptionalIds(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  return Array.from(
+    new Set(
+      rawList
+        .map((value) => Number(value))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  );
+}
+
+function resolveOfferProductSelection(payload = {}, { requirePresence = false } = {}) {
+  const hasArray = Object.prototype.hasOwnProperty.call(payload, 'producto_ids');
+  const hasSingle = Object.prototype.hasOwnProperty.call(payload, 'producto_id');
+  if (requirePresence && !hasArray && !hasSingle) {
+    return { provided: false, ids: [] };
+  }
+  const raw = [];
+  if (Array.isArray(payload.producto_ids)) raw.push(...payload.producto_ids);
+  if (hasSingle && payload.producto_id != null && payload.producto_id !== '') {
+    raw.push(payload.producto_id);
+  }
+  return {
+    provided: hasArray || hasSingle || !requirePresence,
+    ids: parseOptionalIds(raw),
+  };
 }
 
 function handleValidation(req, res) {
@@ -20,10 +42,18 @@ function handleValidation(req, res) {
   return true;
 }
 
-async function ensureProductoExists(productoId) {
-  if (!productoId) return true;
-  const { rows } = await query('SELECT id FROM productos WHERE id = $1 LIMIT 1', [productoId]);
-  return rows.length > 0;
+async function ensureProductosExist(productoIds = []) {
+  const ids = Array.from(
+    new Set(
+      (productoIds || [])
+        .map((value) => Number(value))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  );
+  if (!ids.length) return true;
+  const marks = ids.map((_, idx) => `$${idx + 1}`).join(', ');
+  const { rows } = await query(`SELECT id FROM productos WHERE id IN (${marks})`, ids);
+  return (rows || []).length === ids.length;
 }
 
 async function listOffers(req, res) {
@@ -44,8 +74,11 @@ async function listOffers(req, res) {
 const validateCreateOffer = [
   check('nombre').trim().notEmpty().isLength({ min: 2, max: 160 }),
   check('descripcion').optional().isString().isLength({ max: 2000 }),
+  check('packaging_image_url').optional({ nullable: true }).isString().isLength({ max: 500 }),
   check('tipo_oferta').isIn(OFFER_TYPES),
   check('producto_id').optional({ nullable: true }).isInt({ gt: 0 }),
+  check('producto_ids').optional().isArray({ max: 1000 }),
+  check('producto_ids.*').optional().isInt({ gt: 0 }),
   check('lista_precio_objetivo').optional().isIn(OFFER_PRICE_LISTS),
   check('cantidad_minima').optional().isInt({ min: 1 }),
   check('descuento_pct').isFloat({ gt: 0, max: 100 }),
@@ -59,12 +92,13 @@ async function createOffer(req, res) {
   if (!handleValidation(req, res)) return;
   const payload = req.body || {};
   const tipoOferta = String(payload.tipo_oferta || '').trim().toLowerCase();
-  const productoId = parseOptionalId(payload.producto_id);
+  const selection = resolveOfferProductSelection(payload);
+  const productoIds = selection.ids;
   const fechaDesde = payload.fecha_desde || null;
   const fechaHasta = payload.fecha_hasta || null;
 
-  if (productoId && !(await ensureProductoExists(productoId))) {
-    return res.status(400).json({ error: 'Producto no encontrado para la oferta' });
+  if (!(await ensureProductosExist(productoIds))) {
+    return res.status(400).json({ error: 'Uno o mas productos no existen para la oferta' });
   }
   if (tipoOferta === 'fecha' && (!fechaDesde || !fechaHasta)) {
     return res.status(400).json({ error: 'Las ofertas por fecha requieren fecha_desde y fecha_hasta' });
@@ -77,8 +111,9 @@ async function createOffer(req, res) {
     const created = await repo.createOffer({
       nombre: payload.nombre,
       descripcion: payload.descripcion,
+      packaging_image_url: payload.packaging_image_url,
       tipo_oferta: tipoOferta,
-      producto_id: productoId,
+      producto_ids: productoIds,
       lista_precio_objetivo: payload.lista_precio_objetivo || 'todas',
       cantidad_minima: payload.cantidad_minima,
       descuento_pct: payload.descuento_pct,
@@ -97,8 +132,11 @@ async function createOffer(req, res) {
 const validateUpdateOffer = [
   check('nombre').optional().trim().isLength({ min: 2, max: 160 }),
   check('descripcion').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  check('packaging_image_url').optional({ nullable: true }).isString().isLength({ max: 500 }),
   check('tipo_oferta').optional().isIn(OFFER_TYPES),
   check('producto_id').optional({ nullable: true }).isInt({ gt: 0 }),
+  check('producto_ids').optional().isArray({ max: 1000 }),
+  check('producto_ids.*').optional().isInt({ gt: 0 }),
   check('lista_precio_objetivo').optional().isIn(OFFER_PRICE_LISTS),
   check('cantidad_minima').optional().isInt({ min: 1 }),
   check('descuento_pct').optional().isFloat({ gt: 0, max: 100 }),
@@ -114,11 +152,12 @@ async function updateOffer(req, res) {
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID invalido' });
 
   const payload = { ...(req.body || {}) };
-  if (Object.prototype.hasOwnProperty.call(payload, 'producto_id')) {
-    payload.producto_id = parseOptionalId(payload.producto_id);
-    if (payload.producto_id && !(await ensureProductoExists(payload.producto_id))) {
-      return res.status(400).json({ error: 'Producto no encontrado para la oferta' });
+  const selection = resolveOfferProductSelection(payload, { requirePresence: true });
+  if (selection.provided) {
+    if (!(await ensureProductosExist(selection.ids))) {
+      return res.status(400).json({ error: 'Uno o mas productos no existen para la oferta' });
     }
+    payload.producto_ids = selection.ids;
   }
   if (payload.fecha_desde && payload.fecha_hasta && new Date(payload.fecha_hasta) < new Date(payload.fecha_desde)) {
     return res.status(400).json({ error: 'fecha_hasta no puede ser menor a fecha_desde' });

@@ -4,6 +4,48 @@ import Alert from '../components/Alert';
 import { useLicense } from '../context/LicenseContext';
 import { FEATURE_LIST, hasFeature } from '../lib/features';
 
+type WhatsappCapabilities = {
+  supportsMediaUrl?: boolean;
+  supportsDocumentBuffer?: boolean;
+  requiresConnection?: boolean;
+};
+
+type WhatsappStatus = {
+  provider?: string;
+  configured?: boolean;
+  ready?: boolean;
+  state?: string;
+  phone?: string | null;
+  qrAvailable?: boolean;
+  qrUpdatedAt?: string | null;
+  lastConnectedAt?: string | null;
+  lastError?: string | null;
+  capabilities?: WhatsappCapabilities;
+};
+
+function formatWhatsappProviderName(provider?: string | null) {
+  if (provider === 'web') return 'WhatsApp Web';
+  if (provider === 'off') return 'Deshabilitado';
+  return provider || 'Sin definir';
+}
+
+function formatWhatsappState(state?: string | null) {
+  if (state === 'connected') return 'Conectado';
+  if (state === 'connecting') return 'Conectando';
+  if (state === 'scanning') return 'Esperando QR';
+  if (state === 'reconnecting') return 'Reconectando';
+  if (state === 'error') return 'Con error';
+  if (state === 'disabled') return 'Deshabilitado';
+  return 'Desconectado';
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString('es-AR');
+}
+
 export default function ConfiguracionAdmin() {
   const { status: licenseStatus, loading: licenseLoading, refresh: refreshLicense } = useLicense();
   const [dolarBlue, setDolarBlue] = useState<string>('');
@@ -88,6 +130,12 @@ export default function ConfiguracionAdmin() {
   const [metodoSaving, setMetodoSaving] = useState(false);
   const [editMetodoId, setEditMetodoId] = useState<number | null>(null);
   const [editMetodoForm, setEditMetodoForm] = useState({ nombre: '', moneda: '', orden: '', activo: true });
+  const [whatsappStatus, setWhatsappStatus] = useState<WhatsappStatus | null>(null);
+  const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
+  const [whatsappLoading, setWhatsappLoading] = useState(false);
+  const [whatsappActionLoading, setWhatsappActionLoading] = useState(false);
+  const [whatsappError, setWhatsappError] = useState<string | null>(null);
+  const [whatsappSuccess, setWhatsappSuccess] = useState<string | null>(null);
   const cloudEnabled = hasFeature(licenseStatus, 'cloud');
   const showCloudLinking = false;
 
@@ -331,6 +379,54 @@ export default function ConfiguracionAdmin() {
     })();
     return () => {
       active = false;
+    };
+  }, []);
+
+  async function refreshWhatsappStatus(opts: { silent?: boolean; withQr?: boolean } = {}) {
+    if (!opts.silent) setWhatsappLoading(true);
+    setWhatsappError(null);
+    try {
+      const status = (await Api.whatsappStatus()) as WhatsappStatus;
+      setWhatsappStatus(status);
+
+      const shouldLoadQr =
+        Boolean(opts.withQr) &&
+        status?.provider === 'web' &&
+        status?.qrAvailable &&
+        status?.state === 'scanning';
+
+      if (shouldLoadQr) {
+        const qrData = await Api.whatsappQr().catch(() => null);
+        setWhatsappQr(qrData?.qr || null);
+      } else if (status?.provider !== 'web' || status?.state !== 'scanning') {
+        setWhatsappQr(null);
+      }
+    } catch (err) {
+      setWhatsappError(
+        err instanceof Error ? err.message : 'No se pudo cargar el estado de WhatsApp'
+      );
+      setWhatsappQr(null);
+    } finally {
+      if (!opts.silent) setWhatsappLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+
+    const load = async (withQr = false) => {
+      if (!active) return;
+      await refreshWhatsappStatus({ silent: !withQr, withQr });
+    };
+
+    load(true);
+    const timer = window.setInterval(() => {
+      load(true);
+    }, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -693,7 +789,7 @@ export default function ConfiguracionAdmin() {
     setLicenseSuccess(null);
     const code = licenseCode.trim();
     if (!code) {
-      setLicenseError('PegÃ¡ el cÃ³digo de licencia');
+      setLicenseError('Pegá el código de licencia');
       return;
     }
     setLicenseSaving(true);
@@ -933,11 +1029,162 @@ export default function ConfiguracionAdmin() {
     }
   }
 
+  async function onWhatsappConnect(force = false) {
+    setWhatsappActionLoading(true);
+    setWhatsappError(null);
+    setWhatsappSuccess(null);
+    try {
+      const status = (await Api.whatsappConnect({ force })) as WhatsappStatus;
+      setWhatsappStatus(status);
+      setWhatsappSuccess(
+        status?.state === 'scanning'
+          ? 'Conexion iniciada. Escanea el QR desde tu telefono.'
+          : 'Conexion de WhatsApp iniciada.'
+      );
+      await refreshWhatsappStatus({ silent: true, withQr: true });
+    } catch (err) {
+      setWhatsappError(
+        err instanceof Error ? err.message : 'No se pudo iniciar WhatsApp'
+      );
+    } finally {
+      setWhatsappActionLoading(false);
+    }
+  }
+
+  async function onWhatsappDisconnect() {
+    setWhatsappActionLoading(true);
+    setWhatsappError(null);
+    setWhatsappSuccess(null);
+    try {
+      const status = (await Api.whatsappDisconnect()) as WhatsappStatus;
+      setWhatsappStatus(status);
+      setWhatsappQr(null);
+      setWhatsappSuccess('Sesion de WhatsApp desconectada.');
+    } catch (err) {
+      setWhatsappError(
+        err instanceof Error ? err.message : 'No se pudo desconectar WhatsApp'
+      );
+    } finally {
+      setWhatsappActionLoading(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <div className="app-title">Configuracion</div>
         <div className="app-subtitle">Panel de administracion y licencias</div>
+      </div>
+
+      <div className="app-card p-4 space-y-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="text-sm text-slate-300 mb-1">Canal WhatsApp</div>
+            <div className="text-xs text-slate-400">
+              Proveedor activo: {formatWhatsappProviderName(whatsappStatus?.provider)}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="h-9 rounded-lg bg-emerald-600 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+              onClick={() =>
+                onWhatsappConnect(
+                  whatsappStatus?.state === 'reconnecting' ||
+                    whatsappStatus?.state === 'scanning'
+                )
+              }
+              disabled={whatsappActionLoading || whatsappStatus?.provider !== 'web'}
+            >
+              {whatsappActionLoading ? 'Procesando...' : 'Conectar / refrescar'}
+            </button>
+            <button
+              type="button"
+              className="h-9 rounded-lg bg-slate-700 text-white px-4 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+              onClick={onWhatsappDisconnect}
+              disabled={
+                whatsappActionLoading ||
+                whatsappStatus?.provider !== 'web' ||
+                whatsappStatus?.state === 'disconnected'
+              }
+            >
+              Desconectar
+            </button>
+          </div>
+        </div>
+
+        {whatsappError && <Alert kind="error" message={whatsappError} />}
+        {whatsappSuccess && <Alert kind="info" message={whatsappSuccess} />}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Estado</div>
+              <div className="mt-1 text-slate-100">
+                {whatsappLoading ? 'Cargando...' : formatWhatsappState(whatsappStatus?.state)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Numero</div>
+              <div className="mt-1 text-slate-100">{whatsappStatus?.phone || '-'}</div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Ultimo enlace</div>
+              <div className="mt-1 text-slate-100">
+                {formatDateTime(whatsappStatus?.lastConnectedAt)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">QR actualizado</div>
+              <div className="mt-1 text-slate-100">
+                {formatDateTime(whatsappStatus?.qrUpdatedAt)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 sm:col-span-2">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Notas operativas</div>
+              <div className="mt-1 text-slate-300 space-y-1">
+                <div>
+                  Conexion persistente: {whatsappStatus?.capabilities?.requiresConnection ? 'si' : 'no'}
+                </div>
+                <div>
+                  PDFs adjuntos directos: {whatsappStatus?.capabilities?.supportsDocumentBuffer ? 'si' : 'no'}
+                </div>
+                <div>
+                  URLs publicas requeridas: {whatsappStatus?.capabilities?.supportsMediaUrl ? 'si' : 'no'}
+                </div>
+                {whatsappStatus?.lastError ? (
+                  <div className="text-amber-300">Ultimo error: {whatsappStatus.lastError}</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+            <div className="text-sm text-slate-200 mb-2">Vinculacion QR</div>
+            {whatsappStatus?.provider !== 'web' ? (
+              <p className="text-xs text-slate-400">
+                El proveedor activo no usa QR. Cambia `WHATSAPP_PROVIDER=web` para operar con WhatsApp Web.
+              </p>
+            ) : whatsappQr ? (
+              <div className="space-y-3">
+                <img
+                  src={whatsappQr}
+                  alt="QR de WhatsApp"
+                  className="mx-auto w-52 h-52 rounded-xl bg-white p-3"
+                />
+                <p className="text-xs text-slate-400">
+                  Abri WhatsApp en el celular, entra en dispositivos vinculados y escanea este QR.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">
+                {whatsappStatus?.state === 'connected'
+                  ? 'La sesion ya esta vinculada.'
+                  : 'Inicia la conexion para generar un QR nuevo.'}
+              </p>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1371,7 +1618,7 @@ export default function ConfiguracionAdmin() {
                 )}
                 {licenseStatus.license_type === 'demo' && (
                   <div className="text-amber-300">
-                    Demo activa{licenseStatus.demo_days_left != null ? ` (${licenseStatus.demo_days_left} dÃ­as restantes)` : ''}.
+                    Demo activa{licenseStatus.demo_days_left != null ? ` (${licenseStatus.demo_days_left} días restantes)` : ''}.
                   </div>
                 )}
                 {!licenseStatus.licensed && (

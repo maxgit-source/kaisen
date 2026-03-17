@@ -1,5 +1,6 @@
 const { check, validationResult } = require('express-validator');
 const repo = require('../db/repositories/categoryRepository');
+const logger = require('../lib/logger');
 
 function parseOptionalPositiveInt(value) {
   if (value === undefined || value === null || value === '') return null;
@@ -27,7 +28,7 @@ function sendKnownCategoryError(err, res, fallbackMessage) {
   if (err && (err.code === 'CATEGORY_NOT_FOUND' || err.status === 404)) {
     return res.status(404).json({ error: 'Categoria no encontrada' });
   }
-  console.error(fallbackMessage, err);
+  logger.error(fallbackMessage, err);
   return res.status(500).json({ error: fallbackMessage });
 }
 
@@ -117,7 +118,7 @@ const validateCategoryMove = [
 async function createCategoria(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.error('Validacion fallida en createCategoria:', errors.array());
+    logger.error('Validacion fallida en createCategoria:', errors.array());
     return res.status(400).json({ errors: errors.array() });
   }
 
@@ -145,7 +146,7 @@ async function createCategoria(req, res) {
 async function updateCategoria(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.error('Validacion fallida en updateCategoria:', errors.array());
+    logger.error('Validacion fallida en updateCategoria:', errors.array());
     return res.status(400).json({ errors: errors.array() });
   }
 
@@ -167,7 +168,7 @@ async function updateCategoria(req, res) {
 async function moveCategoria(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.error('Validacion fallida en moveCategoria:', errors.array());
+    logger.error('Validacion fallida en moveCategoria:', errors.array());
     return res.status(400).json({ errors: errors.array() });
   }
 

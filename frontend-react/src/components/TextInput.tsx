@@ -13,6 +13,7 @@ const TextInput = forwardRef<HTMLInputElement, Props>(
     const [revealed, setRevealed] = useState(false);
     const inputId = id || rest.name || label.replace(/\s+/g, '-').toLowerCase();
     const hasError = Boolean(error);
+    const errorId = `${inputId}-error`;
     const isPassword = type === 'password';
     const showToggle = revealable && isPassword;
     const inputType = showToggle ? (revealed ? 'text' : 'password') : type;
@@ -35,6 +36,8 @@ const TextInput = forwardRef<HTMLInputElement, Props>(
               className,
             ].join(' ')}
             type={inputType}
+            aria-invalid={hasError}
+            aria-describedby={hasError ? errorId : rest['aria-describedby']}
             {...rest}
           />
           {showToggle && (
@@ -73,7 +76,9 @@ const TextInput = forwardRef<HTMLInputElement, Props>(
           )}
         </div>
         {hasError && (
-          <p className="text-xs text-red-600">{error}</p>
+          <p id={errorId} className="text-xs text-red-600">
+            {error}
+          </p>
         )}
       </div>
     );

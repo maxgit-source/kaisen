@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Users, Package, DollarSign, AlertTriangle, Printer } from 'lucide-react';
 import { motion } from 'framer-motion';
 import MetricCard from '../ui/MetricCard';
@@ -6,6 +6,8 @@ import ChartCard from '../ui/ChartCard';
 import Skeleton from '../ui/Skeleton';
 import { useLicense } from '../context/LicenseContext';
 import { hasFeature } from '../lib/features';
+import { formatARS, formatARSCompact, formatFechaHora } from '../lib/formatters';
+import type { InsightItem, InsightsResponse, MovimientoFinanciero } from '../types/entities';
 import {
   LineChart,
   Line,
@@ -25,36 +27,11 @@ import { Api } from '../lib/api';
 type PeriodKey = 'today' | '7d' | '30d' | 'custom';
 type ChartKind = 'line' | 'bar' | 'area';
 
-type MovimientoFinanciero = {
-  fecha: string;
-  totalVentas: number;
-  totalGastos: number;
-  gananciaNeta: number;
-};
-
 type Operacion = {
   fecha: string;
   tipo: string;
   detalle: string;
   monto: number;
-};
-
-type InsightSeverity = 'high' | 'medium' | 'low';
-
-type InsightItem = {
-  id: string;
-  type: string;
-  severity: InsightSeverity;
-  title: string;
-  message: string;
-  entity?: { type: string; id: number | string; name: string };
-  metrics?: Record<string, any>;
-};
-
-type InsightsResponse = {
-  generated_at: string;
-  summary: { total: number; high: number; medium: number; low: number };
-  items: InsightItem[];
 };
 
 export default function Dashboard() {
@@ -64,18 +41,15 @@ export default function Dashboard() {
   const [customDesde, setCustomDesde] = useState<string>('');
   const [customHasta, setCustomHasta] = useState<string>('');
   const [chartType, setChartType] = useState<ChartKind>('line');
-
   const [movimientos, setMovimientos] = useState<MovimientoFinanciero[]>([]);
   const [movLoading, setMovLoading] = useState<boolean>(true);
   const [movError, setMovError] = useState<string | null>(null);
-
   const [deudas, setDeudas] = useState<number>(0);
   const [clientesCount, setClientesCount] = useState<number>(0);
   const [stockItems, setStockItems] = useState<number>(0);
   const [insights, setInsights] = useState<InsightsResponse | null>(null);
   const [insightsLoading, setInsightsLoading] = useState<boolean>(true);
   const [insightsError, setInsightsError] = useState<string | null>(null);
-
   const [ops, setOps] = useState<Operacion[]>([]);
   const [opsLoading, setOpsLoading] = useState<boolean>(true);
   const [opsError, setOpsError] = useState<string | null>(null);
@@ -90,9 +64,7 @@ export default function Dashboard() {
   function computeRange(p: PeriodKey, desde: string, hasta: string): { desde: string; hasta: string } | null {
     const today = new Date();
     const todayStr = toLocalDateString(today);
-    if (p === 'today') {
-      return { desde: todayStr, hasta: todayStr };
-    }
+    if (p === 'today') return { desde: todayStr, hasta: todayStr };
     if (p === '7d') {
       const d = new Date(today);
       d.setDate(d.getDate() - 6);
@@ -107,6 +79,8 @@ export default function Dashboard() {
     return { desde, hasta };
   }
 
+  // Carga inicial de métricas — limitada a las últimas 50 operaciones para evitar
+  // cargar toda la BD en el dashboard (fix crítico de performance).
   useEffect(() => {
     (async () => {
       try {
@@ -114,8 +88,8 @@ export default function Dashboard() {
           Api.deudas(),
           Api.clientes({ estado: 'activo' }),
           Api.inventario(),
-          Api.ventas(),
-          Api.compras(),
+          Api.ventas({ limit: 50 }),
+          Api.compras({ limit: 50 }),
         ]);
         setDeudas(d.reduce((acc: number, r: any) => acc + Number(r.deuda_pendiente || 0), 0));
         setClientesCount(c.length);
@@ -139,9 +113,9 @@ export default function Dashboard() {
           });
         });
         opsList.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
-        setOps(opsList.slice(0, 5));
-      } catch (e) {
-        setOpsError('No se pudieron cargar mÃ©tricas y operaciones');
+        setOps(opsList.slice(0, 10));
+      } catch {
+        setOpsError('No se pudieron cargar métricas y operaciones. Verificá tu conexión e intentá de nuevo.');
       } finally {
         setOpsLoading(false);
       }
@@ -152,7 +126,7 @@ export default function Dashboard() {
     if (!aiEnabled) {
       setInsights(null);
       setInsightsLoading(false);
-      setInsightsError('Modulo de IA no habilitado en la licencia.');
+      setInsightsError('Módulo de IA no habilitado en la licencia.');
       return;
     }
     (async () => {
@@ -161,8 +135,8 @@ export default function Dashboard() {
       try {
         const data = await Api.aiInsights({ days: 14, history: 90, limit: 9 });
         setInsights(data as InsightsResponse);
-      } catch (e) {
-        setInsightsError('No se pudieron cargar recomendaciones y alertas');
+      } catch {
+        setInsightsError('No se pudieron cargar las recomendaciones. Intentá de nuevo en unos minutos.');
         setInsights(null);
       } finally {
         setInsightsLoading(false);
@@ -187,8 +161,8 @@ export default function Dashboard() {
           totalGastos: Number(r.totalGastos || 0),
           gananciaNeta: Number(r.gananciaNeta || 0),
         })));
-      } catch (e) {
-        setMovError('No se pudieron obtener datos');
+      } catch {
+        setMovError('No se pudieron obtener los datos financieros.');
         setMovimientos([]);
       } finally {
         setMovLoading(false);
@@ -199,30 +173,26 @@ export default function Dashboard() {
   const chartData = useMemo(
     () =>
       movimientos.map((r) => ({
-        label: new Date(r.fecha).toLocaleDateString(undefined, { month: 'short', day: '2-digit' }),
+        label: new Date(r.fecha).toLocaleDateString('es-AR', { month: 'short', day: '2-digit' }),
         ventas: r.totalVentas,
         gastos: r.totalGastos,
         neto: r.gananciaNeta,
       })),
-    [movimientos]
+    [movimientos],
   );
 
   const gananciaPeriodo = useMemo(
     () => movimientos.reduce((acc, r) => acc + r.gananciaNeta, 0),
-    [movimientos]
+    [movimientos],
   );
 
-  const canPrint =
-    !movLoading &&
-    !!computeRange(period, customDesde, customHasta);
+  const canPrint = !movLoading && !!computeRange(period, customDesde, customHasta);
 
   const insightSummary = insights?.summary || { total: 0, high: 0, medium: 0, low: 0 };
-  const insightItems = insights?.items || [];
-  const severityLabels: Record<InsightSeverity, string> = {
-    high: 'Alta',
-    medium: 'Media',
-    low: 'Baja',
-  };
+  const insightItems: InsightItem[] = insights?.items || [];
+
+  type InsightSeverity = 'high' | 'medium' | 'low';
+  const severityLabels: Record<InsightSeverity, string> = { high: 'Alta', medium: 'Media', low: 'Baja' };
   const severityStyles: Record<InsightSeverity, { card: string; badge: string }> = {
     high: {
       card: 'border border-rose-500/30 border-l-[3px] border-l-rose-500/70 bg-rose-500/10 shadow-[0_14px_30px_rgba(244,63,94,0.18)]',
@@ -243,7 +213,7 @@ export default function Dashboard() {
     overstock: 'Sobre stock',
     price: 'Precio',
     debt: 'Deuda',
-    anomaly: 'AnomalÃ­a',
+    anomaly: 'Anomalía',
   };
 
   async function handlePrint() {
@@ -254,8 +224,8 @@ export default function Dashboard() {
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (e) {
-      // En un futuro se puede mostrar un toast de error
+    } catch {
+      // toast disponible en el contexto global
     }
   }
 
@@ -308,19 +278,16 @@ export default function Dashboard() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {insightItems.map((item) => {
-                const palette = severityStyles[item.severity] || severityStyles.low;
+                const sev = (item.severity as InsightSeverity) in severityStyles ? item.severity as InsightSeverity : 'low';
+                const palette = severityStyles[sev];
                 const label = typeLabels[item.type] || 'Alerta';
-                const sevLabel = severityLabels[item.severity] || 'Media';
+                const sevLabel = severityLabels[sev];
                 return (
                   <div key={item.id} className={`rounded-xl border px-3 py-2 transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(0,0,0,0.35)] ${palette.card}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-[11px] uppercase tracking-wide text-slate-300">
-                          {label}
-                        </div>
-                        <div className="text-sm font-semibold text-slate-100">
-                          {item.title}
-                        </div>
+                        <div className="text-[11px] uppercase tracking-wide text-slate-300">{label}</div>
+                        <div className="text-sm font-semibold text-slate-100">{item.title}</div>
                       </div>
                       <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${palette.badge}`}>
                         {sevLabel}
@@ -328,9 +295,7 @@ export default function Dashboard() {
                     </div>
                     <div className="text-xs text-slate-200 mt-1">{item.message}</div>
                     {item.entity?.name && (
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        {item.entity.name}
-                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">{item.entity.name}</div>
                     )}
                   </div>
                 );
@@ -349,8 +314,8 @@ export default function Dashboard() {
         {[
           { t: 'Total clientes', v: clientesCount, i: <Users size={22} />, tone: 'pink' },
           { t: 'Productos en stock', v: stockItems, i: <Package size={22} />, tone: 'purple' },
-          { t: 'Ganancia neta (periodo)', v: `$${gananciaPeriodo.toFixed(0)}`, i: <DollarSign size={22} />, tone: 'cyan' },
-          { t: 'Deudas pendientes', v: `$${deudas.toFixed(0)}`, i: <AlertTriangle size={22} />, tone: 'green' },
+          { t: 'Ganancia neta (período)', v: formatARSCompact(gananciaPeriodo), i: <DollarSign size={22} />, tone: 'cyan' },
+          { t: 'Deudas pendientes', v: formatARSCompact(deudas), i: <AlertTriangle size={22} />, tone: 'green' },
         ].map((m, idx) => (
           <motion.div key={idx} variants={{ hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }}>
             <MetricCard title={m.t} value={m.v} icon={m.i} tone={m.tone as any} />
@@ -370,25 +335,15 @@ export default function Dashboard() {
                   className="select-modern text-xs"
                 >
                   <option value="today">Hoy</option>
-                  <option value="7d">7 dÃ­as</option>
-                  <option value="30d">30 dÃ­as</option>
+                  <option value="7d">7 días</option>
+                  <option value="30d">30 días</option>
                   <option value="custom">Rango personalizado</option>
                 </select>
                 {period === 'custom' && (
                   <div className="flex items-center gap-1">
-                    <input
-                      type="date"
-                      value={customDesde}
-                      onChange={(e) => setCustomDesde(e.target.value)}
-                      className="input-modern text-xs"
-                    />
+                    <input type="date" value={customDesde} onChange={(e) => setCustomDesde(e.target.value)} className="input-modern text-xs" />
                     <span className="text-slate-400">a</span>
-                    <input
-                      type="date"
-                      value={customHasta}
-                      onChange={(e) => setCustomHasta(e.target.value)}
-                      className="input-modern text-xs"
-                    />
+                    <input type="date" value={customHasta} onChange={(e) => setCustomHasta(e.target.value)} className="input-modern text-xs" />
                   </div>
                 )}
                 <select
@@ -396,9 +351,9 @@ export default function Dashboard() {
                   onChange={(e) => setChartType(e.target.value as ChartKind)}
                   className="select-modern text-xs"
                 >
-                  <option value="line">LÃ­nea</option>
+                  <option value="line">Línea</option>
                   <option value="bar">Barras</option>
-                  <option value="area">Ãreas</option>
+                  <option value="area">Áreas</option>
                 </select>
                 <button
                   type="button"
@@ -423,7 +378,7 @@ export default function Dashboard() {
                 <div className="h-full flex items-center justify-center text-slate-400 text-sm">{movError}</div>
               ) : !chartData.length ? (
                 <div className="h-full flex items-center justify-center text-slate-400 text-sm">
-                  No hay registros para el perÃ­odo seleccionado
+                  No hay registros para el período seleccionado
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -432,15 +387,11 @@ export default function Dashboard() {
                       <LineChart data={chartData}>
                         <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
                         <XAxis dataKey="label" tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} />
-                        <YAxis tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} />
+                        <YAxis tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} tickFormatter={(v) => formatARSCompact(v)} />
                         <Tooltip
                           wrapperStyle={{ outline: 'none' }}
-                          contentStyle={{
-                            background: 'rgba(2,6,23,0.92)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: 8,
-                            color: '#e2e8f0',
-                          }}
+                          contentStyle={{ background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0' }}
+                          formatter={(value: number) => formatARS(value)}
                           cursor={{ stroke: '#334155' }}
                         />
                         <Legend />
@@ -453,15 +404,11 @@ export default function Dashboard() {
                       <BarChart data={chartData}>
                         <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
                         <XAxis dataKey="label" tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} />
-                        <YAxis tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} />
+                        <YAxis tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} tickFormatter={(v) => formatARSCompact(v)} />
                         <Tooltip
                           wrapperStyle={{ outline: 'none' }}
-                          contentStyle={{
-                            background: 'rgba(2,6,23,0.92)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: 8,
-                            color: '#e2e8f0',
-                          }}
+                          contentStyle={{ background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0' }}
+                          formatter={(value: number) => formatARS(value)}
                           cursor={{ fill: 'rgba(15,23,42,0.6)' }}
                         />
                         <Legend />
@@ -487,15 +434,11 @@ export default function Dashboard() {
                         </defs>
                         <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
                         <XAxis dataKey="label" tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} />
-                        <YAxis tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} />
+                        <YAxis tick={{ fill: '#94a3b8' }} axisLine={{ stroke: '#334155' }} tickLine={{ stroke: '#334155' }} tickFormatter={(v) => formatARSCompact(v)} />
                         <Tooltip
                           wrapperStyle={{ outline: 'none' }}
-                          contentStyle={{
-                            background: 'rgba(2,6,23,0.92)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: 8,
-                            color: '#e2e8f0',
-                          }}
+                          contentStyle={{ background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0' }}
+                          formatter={(value: number) => formatARS(value)}
                           cursor={{ stroke: '#334155' }}
                         />
                         <Legend />
@@ -510,6 +453,7 @@ export default function Dashboard() {
             </div>
           </ChartCard>
         </motion.div>
+
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -533,21 +477,18 @@ export default function Dashboard() {
           ) : (
             <ul className="space-y-2">
               {insightItems.slice(0, 5).map((item) => {
-                const palette = severityStyles[item.severity] || severityStyles.low;
-                const sevLabel = severityLabels[item.severity] || 'Media';
+                const sev = (item.severity as InsightSeverity) in severityStyles ? item.severity as InsightSeverity : 'low';
+                const palette = severityStyles[sev];
+                const sevLabel = severityLabels[sev];
                 return (
                   <li key={item.id} className={`rounded-lg border px-2 py-2 transition-all duration-300 hover:translate-x-1 ${palette.card}`}>
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="truncate pr-2 text-slate-100">{item.title}</span>
-                      <span className={`px-2 py-0.5 rounded-full border text-[10px] ${palette.badge}`}>
-                        {sevLabel}
-                      </span>
+                      <span className={`px-2 py-0.5 rounded-full border text-[10px] ${palette.badge}`}>{sevLabel}</span>
                     </div>
                     <div className="text-[11px] text-slate-200 mt-1 truncate">{item.message}</div>
                     {item.entity?.name && (
-                      <div className="text-[11px] text-slate-400 mt-1 truncate">
-                        {item.entity.name}
-                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1 truncate">{item.entity.name}</div>
                     )}
                   </li>
                 );
@@ -558,7 +499,7 @@ export default function Dashboard() {
       </div>
 
       <div className="app-card p-4">
-        <div className="text-sm text-slate-300 mb-3">Ultimas operaciones</div>
+        <div className="text-sm text-slate-300 mb-3">Últimas operaciones</div>
         <div className="overflow-x-auto">
           {opsLoading ? (
             <div className="py-6 text-center text-slate-400 text-sm">Cargando...</div>
@@ -570,19 +511,19 @@ export default function Dashboard() {
             <table className="min-w-full text-sm">
               <thead className="text-left text-slate-400">
                 <tr>
-                  <th className="py-2">Fecha</th>
-                  <th className="py-2">Tipo</th>
-                  <th className="py-2">Detalle</th>
-                  <th className="py-2">Monto</th>
+                  <th className="py-2 pr-4">Fecha</th>
+                  <th className="py-2 pr-4">Tipo</th>
+                  <th className="py-2 pr-4">Detalle</th>
+                  <th className="py-2 text-right">Monto</th>
                 </tr>
               </thead>
               <tbody className="text-slate-200">
                 {ops.map((r, i) => (
                   <tr key={i} className="border-t border-white/10 hover:bg-white/5">
-                    <td className="py-2">{new Date(r.fecha).toLocaleString()}</td>
-                    <td className="py-2">{r.tipo}</td>
-                    <td className="py-2">{r.detalle}</td>
-                    <td className="py-2">${r.monto.toFixed(2)}</td>
+                    <td className="py-2 pr-4 whitespace-nowrap">{formatFechaHora(r.fecha)}</td>
+                    <td className="py-2 pr-4">{r.tipo}</td>
+                    <td className="py-2 pr-4">{r.detalle}</td>
+                    <td className="py-2 text-right font-mono">{formatARS(r.monto)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -593,5 +534,3 @@ export default function Dashboard() {
     </div>
   );
 }
-
-

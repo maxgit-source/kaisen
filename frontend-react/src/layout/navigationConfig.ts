@@ -1,13 +1,16 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
+  Bell,
   Boxes,
   Brain,
   Building2,
   ClipboardCheck,
   FileBarChart2,
   Handshake,
+  Keyboard,
   LayoutDashboard,
+  Link2,
   Package,
   ReceiptText,
   Settings2,
@@ -49,6 +52,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: 'Gestion',
     items: [
+      { to: '/app/caja', label: 'Caja rapida', shortLabel: 'Caja', icon: Keyboard, roles: ['admin', 'gerente', 'vendedor'] },
       { to: '/app/ventas', label: 'Ventas', shortLabel: 'Ventas', icon: ReceiptText, roles: ['admin', 'gerente', 'vendedor', 'fletero'] },
       { to: '/app/stock', label: 'Stock', shortLabel: 'Stock', icon: Boxes, roles: ['admin', 'gerente', 'vendedor'] },
       { to: '/app/compras', label: 'Compra de productos', shortLabel: 'Compras', icon: ShoppingCart, roles: ['admin', 'gerente'] },
@@ -78,6 +82,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/app/usuarios', label: 'Usuarios', shortLabel: 'Usuarios', icon: UserRoundCog, roles: ['admin'], feature: 'usuarios' },
       { to: '/app/sueldos-vendedores', label: 'Sueldo a vendedores', shortLabel: 'Sueldos', icon: Wallet, roles: ['admin'], feature: 'usuarios' },
       { to: '/app/configuracion', label: 'Configuracion', shortLabel: 'Config', icon: Settings2, roles: ['admin'] },
+      { to: '/app/alertas', label: 'Alertas WhatsApp', shortLabel: 'Alertas', icon: Bell, roles: ['admin'] },
+      { to: '/app/integraciones', label: 'Integraciones', shortLabel: 'Integrac.', icon: Link2, roles: ['admin', 'gerente'], feature: 'integraciones' },
     ],
   },
 ];
@@ -88,15 +94,36 @@ function canSee(item: NavItem, role: string | null, status: any) {
   return hasFeature(status, item.feature);
 }
 
-export function getNavGroups(role: string | null, status: any): NavGroup[] {
+const SIMPLE_ROUTES = new Set([
+  '/app/dashboard',
+  '/app/caja',
+  '/app/ventas',
+  '/app/clientes',
+  '/app/productos',
+  '/app/stock',
+]);
+
+export function getNavGroups(
+  role: string | null,
+  status: any,
+  viewMode: 'simple' | 'advanced' = 'advanced',
+): NavGroup[] {
   return NAV_GROUPS.map((group) => ({
     ...group,
-    items: group.items.filter((item) => canSee(item, role, status)),
+    items: group.items.filter((item) => {
+      if (!canSee(item, role, status)) return false;
+      if (viewMode === 'simple' && !SIMPLE_ROUTES.has(item.to)) return false;
+      return true;
+    }),
   })).filter((group) => group.items.length > 0);
 }
 
-export function getBottomNavItems(role: string | null, status: any): NavItem[] {
-  const groups = getNavGroups(role, status);
+export function getBottomNavItems(
+  role: string | null,
+  status: any,
+  viewMode: 'simple' | 'advanced' = 'advanced',
+): NavItem[] {
+  const groups = getNavGroups(role, status, viewMode);
   const all = groups.flatMap((group) => group.items);
 
   if (role === 'fletero') {
@@ -104,7 +131,10 @@ export function getBottomNavItems(role: string | null, status: any): NavItem[] {
     return fleteroOnly.length ? fleteroOnly : all.slice(0, 1);
   }
 
-  const priority = ['/app/dashboard', '/app/ventas', '/app/clientes', '/app/informes', '/app/stock', '/app/productos'];
+  const priority =
+    viewMode === 'simple'
+      ? ['/app/caja', '/app/ventas', '/app/clientes', '/app/productos', '/app/stock']
+      : ['/app/dashboard', '/app/ventas', '/app/clientes', '/app/informes', '/app/stock', '/app/productos'];
   const selected: NavItem[] = [];
   for (const route of priority) {
     const item = all.find((candidate) => candidate.to === route);

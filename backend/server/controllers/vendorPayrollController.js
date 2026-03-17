@@ -60,6 +60,8 @@ async function listSueldos(req, res) {
       const comisionMonto = payroll.roundMoney(Number(row.comision_total || 0));
       const pagadoTotal = Number(pagosByUser.get(userId) || 0);
       const saldo = payroll.roundMoney(comisionMonto - pagadoTotal);
+      const comisionPctEfectiva =
+        ventasTotal > 0 ? payroll.roundMoney((comisionMonto / ventasTotal) * 100) : 0;
       return {
         usuario_id: userId,
         nombre: row.nombre,
@@ -67,7 +69,7 @@ async function listSueldos(req, res) {
         activo: row.activo,
         ventas_count: Number(row.ventas_count || 0),
         ventas_total: ventasTotal,
-        comision_porcentaje: 0,
+        comision_porcentaje: comisionPctEfectiva,
         comision_base: commissionConfig?.mode === 'lista' ? 'lista' : 'producto',
         comision_monto: comisionMonto,
         pagado_total: pagadoTotal,
@@ -219,8 +221,9 @@ async function createPago(req, res) {
     });
 
     const ventasTotal = Number(ventasRes?.ventas_total || 0);
-    const porcentaje = 0;
     const montoCalculado = payroll.roundMoney(Number(ventasRes?.comision_total || 0));
+    const porcentaje =
+      ventasTotal > 0 ? payroll.roundMoney((montoCalculado / ventasTotal) * 100) : 0;
     const montoPagado = Number(req.body.monto_pagado || 0);
 
     const created = await repo.createPago({

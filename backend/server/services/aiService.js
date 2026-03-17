@@ -1,5 +1,7 @@
 const { query } = require('../db/pg');
 const categoryRepo = require('../db/repositories/categoryRepository');
+const logger = require('../lib/logger');
+const { getJson: getRuntimeJson, setJson: setRuntimeJson } = require('./runtimeStore');
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
@@ -37,27 +39,35 @@ const DEFAULT_STOCKOUT_DAYS_MED = Math.max(
   DEFAULT_STOCKOUT_DAYS_HIGH + 1,
   Number(process.env.AI_STOCKOUT_DAYS_MED || 7)
 );
-
-const forecastCache = new Map();
-const insightsCache = new Map();
-const configCache = { ts: 0, data: null };
+const SALES_AGGREGATION_MODE = String(process.env.AI_SALES_AGGREGATION_MODE || 'auto')
+  .trim()
+  .toLowerCase();
+const SALES_MODE_CACHE_MS = Math.max(5000, Number(process.env.AI_SALES_MODE_CACHE_MS || 30000));
+const DELIVERED_MODE_MIN_RATIO = clamp(
+  toNumber(process.env.AI_DELIVERED_MODE_MIN_RATIO, 0.6),
+  0.05,
+  1
+);
+const DELIVERED_MODE_MIN_COUNT = Math.max(
+  1,
+  Number(process.env.AI_DELIVERED_MODE_MIN_COUNT || 20)
+);
 
 function inMarks(start, count) {
   return Array.from({ length: count }, (_, idx) => `$${start + idx}`).join(', ');
 }
 
-function getCache(cache, key, ttlMs) {
-  const hit = cache.get(key);
-  if (!hit) return null;
-  if (Date.now() - hit.ts > ttlMs) {
-    cache.delete(key);
-    return null;
-  }
-  return hit.data;
+function buildCacheKey(namespace, key) {
+  return `ai:${namespace}:${key}`;
 }
 
-function setCache(cache, key, data) {
-  cache.set(key, { ts: Date.now(), data });
+async function getCache(namespace, key) {
+  return getRuntimeJson(buildCacheKey(namespace, key));
+}
+
+async function setCache(namespace, key, data, ttlMs) {
+  // Evict la entrada más antigua cuando se supera el límite
+  await setRuntimeJson(buildCacheKey(namespace, key), data, ttlMs);
   return data;
 }
 
@@ -84,6 +94,88 @@ function buildDateRange(historyDays) {
   }
   return out;
 }
+
+function chooseSalesAggregationMode({
+  configuredMode = SALES_AGGREGATION_MODE,
+  deliveredCount = 0,
+  totalCount = 0,
+  minDeliveredRatio = DELIVERED_MODE_MIN_RATIO,
+  minDeliveredCount = DELIVERED_MODE_MIN_COUNT,
+} = {}) {
+  const mode = String(configuredMode || 'auto').trim().toLowerCase();
+  if (mode === 'all') return 'all';
+  if (mode === 'delivered') return 'delivered';
+  const total = Math.max(0, Number(totalCount || 0));
+  const delivered = Math.max(0, Number(deliveredCount || 0));
+  if (total <= 0) return 'all';
+  const ratio = delivered / total;
+  return delivered >= minDeliveredCount && ratio >= minDeliveredRatio ? 'delivered' : 'all';
+}
+
+function qualifyColumn(alias, column) {
+  return alias ? `${alias}.${column}` : column;
+}
+
+function buildSalesAggregationStrategy(mode, alias = 'v') {
+  const selectedMode = String(mode || 'all').trim().toLowerCase() === 'delivered' ? 'delivered' : 'all';
+  const dateExpr =
+    selectedMode === 'delivered'
+      ? `COALESCE(${qualifyColumn(alias, 'fecha_entrega')}, ${qualifyColumn(alias, 'fecha')})`
+      : qualifyColumn(alias, 'fecha');
+  const conditions =
+    selectedMode === 'delivered'
+      ? [
+          `${qualifyColumn(alias, 'estado_pago')} <> 'cancelado'`,
+          `${qualifyColumn(alias, 'oculto')} = 0`,
+          `${qualifyColumn(alias, 'estado_entrega')} = 'entregado'`,
+        ]
+      : [
+          `${qualifyColumn(alias, 'estado_pago')} <> 'cancelado'`,
+          `${qualifyColumn(alias, 'oculto')} = 0`,
+        ];
+
+  return {
+    mode: selectedMode,
+    dateExpr,
+    whereSql: conditions.join('\n        AND '),
+  };
+}
+
+async function resolveSalesAggregationStrategy({ historyDays = 90 } = {}) {
+  const configuredMode = String(SALES_AGGREGATION_MODE || 'auto').trim().toLowerCase();
+  if (configuredMode === 'all' || configuredMode === 'delivered') {
+    return buildSalesAggregationStrategy(configuredMode, 'v');
+  }
+
+  const cacheKey = `sales-mode:${Math.max(1, Number(historyDays) || 1)}`;
+  const cached = await getCache('sales-mode', cacheKey);
+  if (cached) return cached;
+
+  const dateKeys = buildDateRange(historyDays);
+  const startDate = dateKeys[0];
+  const { rows } = await query(
+    `SELECT COUNT(*)::float AS total_count,
+            SUM(CASE WHEN estado_entrega = 'entregado' THEN 1 ELSE 0 END)::float AS delivered_count
+       FROM ventas
+      WHERE estado_pago <> 'cancelado'
+        AND oculto = 0
+        AND date(fecha, 'localtime') >= date($1)`,
+    [startDate]
+  );
+  const row = rows?.[0] || {};
+  const selectedMode = chooseSalesAggregationMode({
+    configuredMode,
+    deliveredCount: row.delivered_count,
+    totalCount: row.total_count,
+  });
+  return setCache(
+    'sales-mode',
+    cacheKey,
+    buildSalesAggregationStrategy(selectedMode, 'v'),
+    SALES_MODE_CACHE_MS
+  );
+}
+
 function withTimeout(promise, ms = AI_PY_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('AI Python timeout')), ms);
@@ -182,6 +274,7 @@ async function getSalesQtyByProduct(historyDays = 90, categoryId, { includeDesce
   const dateKeys = buildDateRange(historyDays);
   const startDate = dateKeys[0];
   const params = [startDate];
+  const salesStrategy = await resolveSalesAggregationStrategy({ historyDays });
   let categoryFilter = '';
   if (categoryId != null) {
     const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
@@ -198,10 +291,10 @@ async function getSalesQtyByProduct(historyDays = 90, categoryId, { includeDesce
        FROM ventas_detalle vd
        JOIN ventas v ON v.id = vd.venta_id
        JOIN productos p ON p.id = vd.producto_id
-      WHERE v.estado_pago <> 'cancelado'
-        AND date(v.fecha) >= date($1)
+      WHERE ${salesStrategy.whereSql}
+        AND date(${salesStrategy.dateExpr}, 'localtime') >= date($1)
         ${categoryFilter}
-      GROUP BY vd.producto_id`,
+       GROUP BY vd.producto_id`,
     params
   );
   const map = new Map();
@@ -213,6 +306,7 @@ async function getSalesSeriesBundle({ historyDays = 90, categoryId, includeDesce
   const dateKeys = buildDateRange(historyDays);
   const startDate = dateKeys[0];
   const params = [startDate];
+  const salesStrategy = await resolveSalesAggregationStrategy({ historyDays });
   let categoryFilter = '';
   if (categoryId != null) {
     const ids = await categoryRepo.getCategoryFilterIds(categoryId, {
@@ -226,16 +320,16 @@ async function getSalesSeriesBundle({ historyDays = 90, categoryId, includeDesce
   }
   const { rows } = await query(
     `SELECT vd.producto_id AS id,
-            date(v.fecha) AS dia,
+            date(${salesStrategy.dateExpr}, 'localtime') AS dia,
             SUM(vd.cantidad)::float AS unidades
        FROM ventas_detalle vd
        JOIN ventas v ON v.id = vd.venta_id
        JOIN productos p ON p.id = vd.producto_id
-      WHERE v.estado_pago <> 'cancelado'
-        AND date(v.fecha) >= date($1)
+      WHERE ${salesStrategy.whereSql}
+        AND date(${salesStrategy.dateExpr}, 'localtime') >= date($1)
         ${categoryFilter}
-      GROUP BY vd.producto_id, date(v.fecha)
-      ORDER BY vd.producto_id, date(v.fecha)`,
+      GROUP BY vd.producto_id, date(${salesStrategy.dateExpr}, 'localtime')
+      ORDER BY vd.producto_id, date(${salesStrategy.dateExpr}, 'localtime')`,
     params
   );
   const seriesMap = new Map();
@@ -302,8 +396,8 @@ function computeSafetyStock(series, leadTimeDays = DEFAULT_LEAD_TIME_DAYS, servi
 }
 
 async function getInsightsConfig() {
-  const cached = configCache.data;
-  if (cached && Date.now() - configCache.ts < CONFIG_CACHE_MS) return cached;
+  const cached = await getCache('config', 'insights');
+  if (cached) return cached;
 
   const { rows } = await query(
     `SELECT clave, valor_num FROM parametros_sistema
@@ -356,9 +450,7 @@ async function getInsightsConfig() {
     stockoutDaysMed,
   };
 
-  configCache.data = config;
-  configCache.ts = Date.now();
-  return config;
+  return setCache('config', 'insights', config, CONFIG_CACHE_MS);
 }
 async function callPythonForecast({ products, historyDays, forecastDays, seriesBundle }) {
   if (!LOCAL_AI_URL) throw new Error('LOCAL_AI_URL not configured');
@@ -420,7 +512,7 @@ async function buildForecastList({
 } = {}) {
   const targetDays = Math.max(7, toNumber(stockTargetDays, DEFAULT_STOCK_TARGET_DAYS));
   const cacheKey = `forecast:${historyDays}:${forecastDays}:${targetDays}:${categoryId ?? 'all'}:${includeDescendants ? 'tree' : 'node'}`;
-  const cached = getCache(forecastCache, cacheKey, FORECAST_CACHE_MS);
+  const cached = await getCache('forecast', cacheKey);
   if (cached) return cached;
 
   const [products, invMap, seriesBundle] = await Promise.all([
@@ -440,7 +532,7 @@ async function buildForecastList({
         }
       }
     } catch (err) {
-      console.error('AI Python forecast failed, using local forecast:', err);
+      logger.error({ err: err }, 'AI Python forecast failed, using local forecast:');
     }
   }
 
@@ -480,7 +572,7 @@ async function buildForecastList({
     })
     .sort((a, b) => b.daily_avg - a.daily_avg);
 
-  return setCache(forecastCache, cacheKey, list);
+  return setCache('forecast', cacheKey, list, FORECAST_CACHE_MS);
 }
 
 async function forecastByProductSimple({
@@ -539,23 +631,35 @@ function stddev(arr) {
   return Math.sqrt(v);
 }
 
-async function dailyTotals({ table, valueCol, periodDays = 90, filter = '' }) {
+async function dailyTotals({ table, valueCol, periodDays = 90, filter = '', dateExpr = 'fecha' }) {
   const { rows } = await query(
-    `SELECT date(fecha) AS dia, SUM(${valueCol})::float AS total
+    `SELECT date(${dateExpr}, 'localtime') AS dia, SUM(${valueCol})::float AS total
        FROM ${table}
-      WHERE date(fecha) >= date('now', '-' || $1 || ' days') ${filter}
-      GROUP BY date(fecha)
-      ORDER BY date(fecha)`,
+      WHERE date(${dateExpr}, 'localtime') >= date('now', '-' || $1 || ' days') ${filter}
+      GROUP BY date(${dateExpr}, 'localtime')
+      ORDER BY date(${dateExpr}, 'localtime')`,
     [String(periodDays)]
   );
   return rows.map((r) => ({ dia: r.dia, total: toNumber(r.total, 0) }));
+}
+
+async function dailySalesTotals({ periodDays = 90 } = {}) {
+  const salesStrategy = await resolveSalesAggregationStrategy({ historyDays: periodDays });
+  const tableStrategy = buildSalesAggregationStrategy(salesStrategy.mode, '');
+  return dailyTotals({
+    table: 'ventas',
+    valueCol: 'neto',
+    periodDays,
+    dateExpr: tableStrategy.dateExpr,
+    filter: `AND ${tableStrategy.whereSql}`,
+  });
 }
 
 async function anomalies({ scope = 'sales', period = 90, sigma = 3 }) {
   const k = Number(sigma || process.env.AI_ANOMALY_SIGMA || 3);
   const out = {};
   if (scope === 'sales' || scope === 'both') {
-    const sales = await dailyTotals({ table: 'ventas', valueCol: 'neto', periodDays: period, filter: `AND estado_pago <> 'cancelado'` });
+    const sales = await dailySalesTotals({ periodDays: period });
     const vals = sales.map((r) => r.total);
     const m = mean(vals);
     const s = stddev(vals);
@@ -593,16 +697,17 @@ async function forecastDetail({ productoId, historyDays = 90, forecastDays = 14 
 
   const dateKeys = buildDateRange(historyDays);
   const startDate = dateKeys[0];
+  const salesStrategy = await resolveSalesAggregationStrategy({ historyDays });
 
   const { rows } = await query(
-    `SELECT date(v.fecha) AS dia, SUM(vd.cantidad)::float AS unidades
+    `SELECT date(${salesStrategy.dateExpr}, 'localtime') AS dia, SUM(vd.cantidad)::float AS unidades
        FROM ventas_detalle vd
        JOIN ventas v ON v.id = vd.venta_id
       WHERE vd.producto_id = $1
-        AND v.estado_pago <> 'cancelado'
-        AND date(v.fecha) >= date($2)
-      GROUP BY 1
-      ORDER BY 1`,
+        AND ${salesStrategy.whereSql}
+        AND date(${salesStrategy.dateExpr}, 'localtime') >= date($2)
+       GROUP BY 1
+       ORDER BY 1`,
     [id, startDate]
   );
 
@@ -783,7 +888,7 @@ async function pricingRecommendations({ margin, historyDays = 90, limit = 200 })
 
     return recs;
   } catch (err) {
-    console.error('AI Python pricing failed, falling back to simple pricing:', err);
+    logger.error({ err: err }, 'AI Python pricing failed, falling back to simple pricing:');
     return buildSimpleRecs();
   }
 }
@@ -791,7 +896,7 @@ async function pricingRecommendations({ margin, historyDays = 90, limit = 200 })
 async function insights({ historyDays = 90, forecastDays = 14, limit = 12 } = {}) {
   const finalLimit = Math.min(Math.max(parseInt(limit, 10) || 12, 1), 50);
   const cacheKey = `insights:${historyDays}:${forecastDays}:${finalLimit}`;
-  const cached = getCache(insightsCache, cacheKey, INSIGHTS_CACHE_MS);
+  const cached = await getCache('insights', cacheKey);
   if (cached) return cached;
 
   const config = await getInsightsConfig();
@@ -1012,11 +1117,11 @@ async function insights({ historyDays = 90, forecastDays = 14, limit = 12 } = {}
     { total: 0, high: 0, medium: 0, low: 0 }
   );
 
-  return setCache(insightsCache, cacheKey, {
+  return setCache('insights', cacheKey, {
     generated_at: new Date().toISOString(),
     summary,
     items: trimmed,
-  });
+  }, INSIGHTS_CACHE_MS);
 }
 
 module.exports = {
@@ -1026,4 +1131,8 @@ module.exports = {
   pricingRecommendations,
   forecastDetail,
   insights,
+  __test__: {
+    chooseSalesAggregationMode,
+    buildSalesAggregationStrategy,
+  },
 };

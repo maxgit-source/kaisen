@@ -1,10 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Api } from '../lib/api';
 import Button from '../ui/Button';
 import Alert from '../components/Alert';
+import HelpTooltip from '../components/HelpTooltip';
+import SpreadsheetImportPanel from '../components/SpreadsheetImportPanel';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { trackMobileEvent } from '../lib/mobileTelemetry';
+import ClienteDetallePanel from './clientes/ClienteDetallePanel';
+import ClienteFormPanel from './clientes/ClienteFormPanel';
+// Subcomponentes extraídos — WIP: la integración completa con props se hace en el próximo sprint
+// Los archivos ya existen en ./clientes/ listos para conectar
+// import ClienteDetallePanel from './clientes/ClienteDetallePanel';
+// import ClienteFormPanel from './clientes/ClienteFormPanel';
 
 type Cliente = {
   id: number;
@@ -27,6 +35,7 @@ type Cliente = {
    segmento?: string | null;
    tags?: string | null;
   estado: 'activo' | 'inactivo';
+  deleted_at?: string | null;
 };
 
 type Zona = {
@@ -177,6 +186,7 @@ function recordatorioStatusLabel(status: RecordatorioCobranza['status']) {
 export default function Clientes() {
   const isMobile = useMediaQuery('(max-width: 767px)');
   const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [deletedClientes, setDeletedClientes] = useState<Cliente[]>([]);
   const [deudas, setDeudas] = useState<Record<number, number>>({});
   const [deudaUmbralRojo, setDeudaUmbralRojo] = useState<number>(1000000);
   const [q, setQ] = useState('');
@@ -264,7 +274,7 @@ export default function Clientes() {
   const searchInitialized = useRef(false);
   const canSubmit = useMemo(() => Boolean(form.nombre), [form]);
 
-  async function loadBase() {
+  const loadBase = useCallback(async () => {
     setError(null);
     try {
       const [deudaRows, topRows, umbralRes, zonasRes] = await Promise.all([
@@ -295,9 +305,9 @@ export default function Clientes() {
     } catch (e: any) {
       setError(e?.message || 'No se pudieron cargar los clientes');
     }
-  }
+  }, []);
 
-  async function loadClientes(query: string) {
+  const loadClientes = useCallback(async (query: string) => {
     const startedAt = Date.now();
     setLoading(true);
     setError(null);
@@ -329,15 +339,27 @@ export default function Clientes() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [isMobile]);
 
-  async function load() {
-    await Promise.all([loadBase(), loadClientes(q)]);
-  }
+  const loadDeletedClientes = useCallback(async () => {
+    try {
+      const rows = await Api.clientesPapelera({
+        limit: 25,
+        view: isMobile ? 'mobile' : 'full',
+      });
+      setDeletedClientes(Array.isArray(rows) ? (rows as Cliente[]) : []);
+    } catch {
+      setDeletedClientes([]);
+    }
+  }, [isMobile]);
+
+  const load = useCallback(async () => {
+    await Promise.all([loadBase(), loadClientes(q), loadDeletedClientes()]);
+  }, [loadBase, loadClientes, loadDeletedClientes, q]);
 
   useEffect(() => {
     load();
-  }, [isMobile]);
+  }, [load]);
 
   useEffect(() => {
     let active = true;
@@ -371,7 +393,16 @@ export default function Clientes() {
       loadClientes(q);
     }, 300);
     return () => window.clearTimeout(handle);
-  }, [q]);
+  }, [loadClientes, q]);
+
+  useEffect(() => {
+    const onEscape = () => {
+      setShowHistorialModal(false);
+    };
+
+    window.addEventListener('kaisen:escape', onEscape as EventListener);
+    return () => window.removeEventListener('kaisen:escape', onEscape as EventListener);
+  }, []);
 
   async function loadCobranzaCliente(clienteId: number) {
     setCobranzaLoading(true);
@@ -501,7 +532,7 @@ export default function Clientes() {
     const deudaCorriente = Number(selectedCliente ? deudas[selectedCliente.id] || 0 : 0);
     const ticketPromedio = comprasCount ? totalComprado / comprasCount : 0;
 
-    // Frecuencia promedio entre compras (en dÃ­as)
+    // Frecuencia promedio entre compras (en días)
     let frecuenciaPromedioDias: number | null = null;
     if (comprasCount > 1) {
       const ordenadas = [...detalleVentas]
@@ -523,7 +554,7 @@ export default function Clientes() {
       }
     }
 
-    // PosiciÃ³n en ranking interno (si estÃ¡ en el top cargado)
+    // Posición en ranking interno (si está en el top cargado)
     const idx = ranking.findIndex((r) => r.cliente_id === selectedCliente.id);
     const rankingPosicion = idx >= 0 ? idx + 1 : null;
 
@@ -669,7 +700,7 @@ export default function Clientes() {
   async function eliminarCliente(cliente: Cliente) {
     if (
       !window.confirm(
-        `Eliminar cliente ${cliente.nombre}? Esta acciÃ³n no se puede deshacer.`
+        `Eliminar cliente ${cliente.nombre}? Esta acción no se puede deshacer.`
       )
     ) {
       return;
@@ -680,6 +711,16 @@ export default function Clientes() {
       await load();
     } catch (e: any) {
       setError(e?.message || 'No se pudo eliminar el cliente');
+    }
+  }
+
+  async function restaurarCliente(cliente: Cliente) {
+    setError(null);
+    try {
+      await Api.restaurarCliente(cliente.id);
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'No se pudo restaurar el cliente');
     }
   }
 
@@ -901,17 +942,19 @@ export default function Clientes() {
       });
     try {
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch {}
+    } catch {
+      // No interrumpir la edicion si el navegador no soporta smooth scroll.
+    }
   }
 
   async function completarDesdePadron() {
     setPadronError(null);
     if (!editingCliente) {
-      setPadronError('Guarda el cliente antes de consultar padrÃ³n.');
+      setPadronError('Guardá el cliente antes de consultar padrón.');
       return;
     }
     if (!form.cuit_cuil) {
-      setPadronError('Ingresa un CUIT/CUIL vÃ¡lido.');
+      setPadronError('Ingresá un CUIT/CUIL válido.');
       return;
     }
     setPadronLoading(true);
@@ -939,7 +982,7 @@ export default function Clientes() {
           padronOverwrite && data.apellido ? data.apellido : prev.apellido,
       }));
     } catch (e: any) {
-      setPadronError(e?.message || 'No se pudo consultar padrÃ³n');
+      setPadronError(e?.message || 'No se pudo consultar padrón');
     } finally {
       setPadronLoading(false);
     }
@@ -953,7 +996,7 @@ export default function Clientes() {
     );
     if (!asunto) return;
     const descripcion =
-      window.prompt('DescripciÃ³n (opcional)', '') || undefined;
+      window.prompt('Descripción (opcional)', '') || undefined;
     try {
       await Api.crearActividad({
         tipo: 'llamada',
@@ -972,7 +1015,7 @@ export default function Clientes() {
     } catch (e: any) {
       // En esta vista usamos un fallback simple de alerta
       window.alert(
-        e?.message || 'No se pudo crear la actividad rÃ¡pida'
+        e?.message || 'No se pudo crear la actividad rápida'
       );
     }
   }
@@ -1014,7 +1057,7 @@ export default function Clientes() {
             if (!editingCliente && deudaAnteriorForm.tiene) {
               const montoNum = Number(deudaAnteriorForm.monto.replace(',', '.'));
               if (!Number.isFinite(montoNum) || montoNum <= 0) {
-                setError('Ingresa un monto vÃ¡lido para la deuda anterior');
+                setError('Ingresá un monto válido para la deuda anterior');
                 return;
               }
             }
@@ -1162,7 +1205,7 @@ export default function Clientes() {
               className="px-3 py-1.5 rounded bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/30 text-indigo-200 text-xs disabled:opacity-60 disabled:cursor-not-allowed"
               disabled={!editingCliente || padronLoading}
             >
-              {padronLoading ? 'Consultando padrÃ³n...' : 'Completar desde padron'}
+              {padronLoading ? 'Consultando padrón...' : 'Completar desde padrón'}
             </button>
             <label className="flex items-center gap-2 text-xs text-slate-300">
               <input
@@ -1356,6 +1399,30 @@ export default function Clientes() {
           </div>
         </form>
       </div>
+      <SpreadsheetImportPanel
+        title="Importar clientes desde Excel"
+        description="Permite migrar padrones completos, detecta emails duplicados, normaliza teléfonos y deja trazabilidad por fila si algo falla."
+        templateName="plantilla-clientes.csv"
+        templateHeaders={[
+          'nombre',
+          'apellido',
+          'email',
+          'telefono',
+          'direccion',
+          'cuit_cuil',
+          'condicion_iva',
+          'estado',
+        ]}
+        upload={(file, opts) =>
+          Api.importarClientesExcel(file, {
+            dryRun: opts?.dryRun,
+            async: opts?.async,
+          })
+        }
+        onCompleted={async () => {
+          await Promise.all([loadBase(), loadClientes(q), loadDeletedClientes()]);
+        }}
+      />
       <div className="app-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="relative w-full md:max-w-sm">
@@ -1476,78 +1543,79 @@ export default function Clientes() {
                 </tr>
               </thead>
               <tbody className="text-slate-200">
-                {clientes.map((c) => (
-                  <tr key={c.id} className="border-t border-white/10 hover:bg-white/5">
-                    <td className="py-2">
-                      {c.nombre} {c.apellido}
-                    </td>
-                    <td className="py-2">{c.email || '-'}</td>
-                    <td className="py-2">
-                      {(() => {
-                        const deuda = Number(deudas[c.id] || 0);
-                        const deudaClass =
-                          deuda <= 0
-                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
-                            : deuda < deudaUmbralRojo
-                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-200'
-                              : 'bg-rose-500/20 border-rose-500/40 text-rose-200';
-                        return (
-                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${deudaClass}`}>
-                            ${deuda.toFixed(2)}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td className="py-2">
-                      <span
-                        className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${
-                          c.estado === 'activo'
-                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
-                            : 'bg-slate-500/20 border-slate-500/40 text-slate-200'
-                        }`}
-                      >
-                        {c.estado === 'activo' ? 'Activo' : 'Inactivo'}
-                      </span>
-                    </td>
-                    <td className="py-2 space-x-2">
-                      <button
-                        className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200 text-xs"
-                        onClick={() => verDetalleCliente(c)}
-                      >
-                        Ver detalle
-                      </button>
-                      <button
-                        className="px-2 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs"
-                        onClick={() => startEditCliente(c)}
-                      >
-                        Editar
-                      </button>
-                      {c.estado === 'activo' ? (
-                        <button
-                          className="px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 text-xs"
-                          onClick={() => cambiarEstado(c, 'inactivo')}
+                {clientes.map((cliente) => {
+                  const deuda = Number(deudas[cliente.id] || 0);
+                  const deudaClass =
+                    deuda <= 0
+                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
+                      : deuda < deudaUmbralRojo
+                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-200'
+                      : 'bg-rose-500/20 border-rose-500/40 text-rose-200';
+
+                  return (
+                    <tr key={cliente.id} className="border-t border-white/10 hover:bg-white/5">
+                      <td className="py-2">
+                        {cliente.nombre} {cliente.apellido}
+                      </td>
+                      <td className="py-2">{cliente.email || '-'}</td>
+                      <td className="py-2">
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${deudaClass}`}>
+                          ${deuda.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="py-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${
+                            cliente.estado === 'activo'
+                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
+                              : 'bg-slate-500/20 border-slate-500/40 text-slate-200'
+                          }`}
                         >
-                          Desactivar
-                        </button>
-                      ) : (
-                        <>
+                          {cliente.estado === 'activo' ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                      <td className="py-2">
+                        <div className="flex flex-wrap gap-2">
                           <button
-                            className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs"
-                            onClick={() => cambiarEstado(c, 'activo')}
+                            className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200 text-xs"
+                            onClick={() => verDetalleCliente(cliente)}
                           >
-                            Activar
+                            Ver detalle
                           </button>
                           <button
-                            className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 text-xs"
-                            onClick={() => eliminarCliente(c)}
+                            className="px-2 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs"
+                            onClick={() => startEditCliente(cliente)}
                           >
-                            Eliminar
+                            Editar
                           </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                          {cliente.estado === 'activo' ? (
+                            <button
+                              className="px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 text-xs"
+                              onClick={() => cambiarEstado(cliente, 'inactivo')}
+                            >
+                              Desactivar
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs"
+                                onClick={() => cambiarEstado(cliente, 'activo')}
+                              >
+                                Activar
+                              </button>
+                              <button
+                                className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 text-xs"
+                                onClick={() => eliminarCliente(cliente)}
+                              >
+                                Eliminar
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {!loading && !clientes.length && (
                   <tr>
                     <td className="py-6 text-center text-slate-400" colSpan={5}>
@@ -1560,976 +1628,122 @@ export default function Clientes() {
           )}
         </div>
       </div>
-      {selectedCliente && (
+
       <div className="app-card p-4">
-          <div className="flex items-start justify-between mb-3">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-100">Detalle de cliente</h3>
-              <p className="text-sm text-slate-400">
-                {selectedCliente.nombre} {selectedCliente.apellido || ''} Â·{' '}
-                {selectedCliente.email || '-'}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200 text-xs"
-                onClick={abrirHistorialPagos}
-              >
-                Historial pagos y entregas
-              </button>
-              <button
-                className="px-2 py-1 rounded bg-slate-500/20 hover:bg-slate-500/30 border border-slate-500/40 text-slate-200 text-xs"
-                onClick={() => {
-                  setSelectedCliente(null);
-                  setDetalleVentas([]);
-                  setDetalleError(null);
-                  setCrmOpps([]);
-                  setCrmActs([]);
-                  setClienteAcceso(null);
-                  setAccessError(null);
-                  setShowHistorialModal(false);
-                  setHistorialPagos([]);
-                  setHistorialError(null);
-                  setRiesgoMora(null);
-                  setPromesasCobranza([]);
-                  setRecordatoriosCobranza([]);
-                  setCobranzaError(null);
-                  setPagoDeudaForm({
-                    fecha: new Date().toISOString().slice(0, 10),
-                    venta_id: '',
-                  });
-                  setPagoMetodos([{ metodo_id: '', monto: '', moneda: '' }]);
-                  setPagoDeudaError(null);
-                  setPromesaForm({
-                    monto: '',
-                    fecha: new Date().toISOString().slice(0, 10),
-                    canal: 'whatsapp',
-                    notas: '',
-                  });
-                  setRecordatorioForm({
-                    canal: 'whatsapp',
-                    destino: '',
-                    template_code: 'manual_followup',
-                    mensaje: '',
-                  });
-                }}
-              >
-                Cerrar
-              </button>
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-slate-100">Papelera de clientes</div>
+            <div className="text-xs text-slate-400">
+              Los clientes eliminados se pueden restaurar para recuperar historial y cobranza.
             </div>
           </div>
-          {detalleError && (
-            <div className="mb-3">
-              <Alert kind="error" message={detalleError} />
-            </div>
-          )}
-          {detalleLoading ? (
-            <div className="py-6 text-center text-slate-500">
-              Cargando detalle de cliente...
-            </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 text-sm">
-                <div className="space-y-1">
-                  <div className="text-xs text-slate-400 uppercase">Datos</div>
-                  <div>
-                    Telefono:{' '}
-                    <span className="text-slate-200">
-                      {selectedCliente.telefono || '-'}
-                    </span>
-                  </div>
-                  <div>
-                    Direccion:{' '}
-                    <span className="text-slate-200">
-                      {selectedCliente.direccion || '-'}
-                    </span>
-                  </div>
-                  <div>
-                    Entre calles:{' '}
-                    <span className="text-slate-200">
-                      {selectedCliente.entre_calles || '-'}
-                    </span>
-                  </div>
-                  <div>
-                    CUIT/CUIL:{' '}
-                    <span className="text-slate-200">
-                      {selectedCliente.cuit_cuil || '-'}
-                    </span>
-                  </div>
-                  {accessError && (
-                    <div className="text-xs text-rose-300">{accessError}</div>
-                  )}
-                  <div>
-                    Acceso cliente:{' '}
-                    <span className="text-slate-200">
-                      {clienteAcceso?.has_access ? 'Activo' : 'Sin acceso'}
-                    </span>
-                  </div>
-                  <div>
-                    Email acceso:{' '}
-                    <span className="text-slate-200">
-                      {clienteAcceso?.email || selectedCliente.email || '-'}
-                    </span>
-                  </div>
-                  {clienteAcceso?.last_login_at && (
-                    <div className="text-xs text-slate-400">
-                      Ultimo ingreso:{' '}
-                      {new Date(clienteAcceso.last_login_at).toLocaleString()}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={configurarAccesoCliente}
-                    className="mt-2 px-2 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs disabled:opacity-60 disabled:cursor-not-allowed"
-                    disabled={accessSaving}
-                  >
-                    {accessSaving
-                      ? 'Guardando...'
-                      : clienteAcceso?.has_access
-                      ? 'Resetear contrasena'
-                      : 'Crear contrasena'}
-                  </button>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-slate-400 uppercase">Resumen</div>
-                  <div>
-                    Total comprado:{' '}
-                    <span className="text-slate-200">
-                      ${resumenSeleccionado.totalComprado.toFixed(2)}
-                    </span>
-                  </div>
-                  <div>
-                    Ticket promedio:{' '}
-                    <span className="text-slate-200">
-                      {resumenSeleccionado.comprasCount
-                        ? `$${resumenSeleccionado.ticketPromedio.toFixed(2)}`
-                        : '-'}
-                    </span>
-                  </div>
-                  <div>
-                    Compras realizadas:{' '}
-                    <span className="text-slate-200">
-                      {resumenSeleccionado.comprasCount}
-                    </span>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-slate-400 uppercase">SituaciÃ³n</div>
-                  <div>
-                    Deuda corriente:{' '}
-                    <span
-                      className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${
-                        resumenSeleccionado.deudaCorriente <= 0
-                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
-                          : resumenSeleccionado.deudaCorriente < deudaUmbralRojo
-                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-200'
-                            : 'bg-rose-500/20 border-rose-500/40 text-rose-200'
-                      }`}
-                    >
-                      ${resumenSeleccionado.deudaCorriente.toFixed(2)}
-                    </span>
-                  </div>
-                  <div>
-                    Ãšltima compra:{' '}
-                    <span className="text-slate-200">
-                      {resumenSeleccionado.ultimaCompra
-                        ? resumenSeleccionado.ultimaCompra.toLocaleString()
-                        : '-'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div>
-                  <h4 className="text-sm font-semibold text-slate-200 mb-2">
-                    Cuenta corriente
-                  </h4>
-                  {isMobile ? (
-                    <div className="space-y-2">
-                      {historialCuenta.map((item) => {
-                        const montoTexto =
-                          typeof item.monto === 'number'
-                            ? item.monto.toFixed(2)
-                            : null;
-                        const movimiento =
-                          item.tipo === 'pago'
-                            ? `Pago $${montoTexto ?? '0.00'}`
-                            : item.tipo === 'compra'
-                              ? `Compro $${montoTexto ?? '0.00'}`
-                              : 'Se llevo';
-                        return (
-                          <article key={item.id} className="app-panel p-3 text-xs space-y-1">
-                            <div className="text-slate-100">{movimiento}</div>
-                            <div className="text-slate-400">
-                              {item.fecha ? new Date(item.fecha).toLocaleDateString() : '-'}
-                            </div>
-                            <div className="text-slate-300">{item.detalle || '-'}</div>
-                          </article>
-                        );
-                      })}
-                      {!historialCuenta.length && (
-                        <div className="app-panel p-3 text-xs text-slate-400">
-                          Sin movimientos registrados
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-xs md:text-sm">
-                        <thead className="text-left text-slate-400">
-                          <tr>
-                            <th className="py-1 pr-2">Fecha</th>
-                            <th className="py-1 pr-2">Movimiento</th>
-                            <th className="py-1 pr-2">Detalle</th>
-                          </tr>
-                        </thead>
-                        <tbody className="text-slate-200">
-                          {historialCuenta.map((item) => {
-                            const montoTexto =
-                              typeof item.monto === 'number'
-                                ? item.monto.toFixed(2)
-                                : null;
-                            const movimiento =
-                              item.tipo === 'pago'
-                                ? `Pago $${montoTexto ?? '0.00'}`
-                                : item.tipo === 'compra'
-                                  ? `Compro $${montoTexto ?? '0.00'}`
-                                  : 'Se llevo';
-                            return (
-                            <tr
-                              key={item.id}
-                              className="border-t border-white/10 hover:bg-white/5"
-                            >
-                              <td className="py-1 pr-2">
-                                {item.fecha ? new Date(item.fecha).toLocaleDateString() : '-'}
-                              </td>
-                              <td className="py-1 pr-2">{movimiento}</td>
-                              <td className="py-1 pr-2">{item.detalle || '-'}</td>
-                            </tr>
-                            );
-                          })}
-                          {!historialCuenta.length && (
-                            <tr>
-                              <td className="py-2 text-slate-400" colSpan={3}>
-                                Sin movimientos registrados
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-slate-200 mb-2">
-                    Pago cuenta corriente
-                  </h4>
-                  {pagoDeudaError && (
-                    <div className="text-xs text-rose-300 mb-2">{pagoDeudaError}</div>
-                  )}
-                  {!ventasPendientes.length && saldoDeudaAnterior <= 0 ? (
-                    <div className="text-sm text-slate-400">
-                      No hay deuda pendiente para registrar pagos.
-                    </div>
-                  ) : (
-                    <form
-                      className="space-y-3 text-sm"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        registrarPagoDeuda();
-                      }}
-                    >
-                      <label className="block">
-                        <div className="text-slate-300 mb-1">Venta pendiente</div>
-                        <select
-                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                          value={pagoDeudaForm.venta_id}
-                          onChange={(e) =>
-                            setPagoDeudaForm((prev) => ({
-                              ...prev,
-                              venta_id: e.target.value,
-                            }))
-                          }
-                          disabled={pagoDeudaSaving}
-                        >
-                          <option value="">Cuenta corriente</option>
-                          {ventasPendientes.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              Venta #{v.id} - saldo ${Number(v.saldo_pendiente ?? v.neto ?? 0).toFixed(2)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs text-slate-400">
-                          <span>Formas de pago</span>
-                          <button
-                            type="button"
-                            className="px-2 py-1 rounded bg-white/10 border border-white/10 text-xs"
-                            onClick={addPagoMetodoRow}
-                            disabled={pagoDeudaSaving}
-                          >
-                            Agregar metodo
-                          </button>
-                        </div>
-                        {metodosPagoLoading && (
-                          <div className="text-xs text-slate-400">Cargando metodos...</div>
-                        )}
-                        {metodosPagoError && (
-                          <div className="text-xs text-rose-300">{metodosPagoError}</div>
-                        )}
-                        {!metodosPagoLoading && !metodosPago.length && (
-                          <div className="text-xs text-amber-200">
-                            No hay metodos de pago configurados. Crea uno en Configuracion.
-                          </div>
-                        )}
-                        <div className="space-y-2">
-                          {pagoMetodos.map((row, index) => {
-                            const metodo = metodosPago.find(
-                              (m) => String(m.id) === String(row.metodo_id)
-                            );
-                            const moneda =
-                              row.moneda || metodo?.moneda || 'ARS';
-                            return (
-                              <div
-                                key={`metodo-${index}`}
-                                className="grid grid-cols-1 md:grid-cols-[1.4fr_0.8fr_auto] gap-2 items-center"
-                              >
-                                <select
-                                  className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                                  value={row.metodo_id}
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    const metodoSel = metodosPago.find(
-                                      (m) => String(m.id) === String(value)
-                                    );
-                                    updatePagoMetodo(index, {
-                                      metodo_id: value,
-                                      moneda: metodoSel?.moneda || '',
-                                    });
-                                  }}
-                                  disabled={pagoDeudaSaving || metodosPagoLoading}
-                                >
-                                  <option value="">Selecciona metodo</option>
-                                  {metodosPago.map((m) => (
-                                    <option key={m.id} value={m.id}>
-                                      {m.nombre}
-                                    </option>
-                                  ))}
-                                </select>
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                                    value={row.monto}
-                                    onChange={(e) =>
-                                      updatePagoMetodo(index, { monto: e.target.value })
-                                    }
-                                    disabled={pagoDeudaSaving}
-                                  />
-                                  <span className="text-[11px] text-slate-400 w-10 text-right">
-                                    {moneda || 'ARS'}
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="px-2 py-1 rounded bg-rose-500/20 border border-rose-500/30 text-rose-200 text-xs disabled:opacity-50"
-                                  onClick={() => removePagoMetodoRow(index)}
-                                  disabled={pagoMetodos.length <= 1 || pagoDeudaSaving}
-                                >
-                                  Quitar
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-slate-400">
-                          <span>Total</span>
-                          <span className="text-slate-100">
-                            ${totalPagoMetodos.toFixed(2)}
-                          </span>
-                        </div>
-                      </div>
-                      <label className="block">
-                        <div className="text-slate-300 mb-1">Fecha</div>
-                        <input
-                          type="date"
-                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                          value={pagoDeudaForm.fecha}
-                          onChange={(e) =>
-                            setPagoDeudaForm((prev) => ({
-                              ...prev,
-                              fecha: e.target.value,
-                            }))
-                          }
-                          disabled={pagoDeudaSaving}
-                        />
-                      </label>
-                      <div className="flex justify-end">
-                        <button
-                          type="submit"
-                          className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/30 hover:bg-emerald-500/30 text-emerald-100 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={!canSubmitPago}
-                        >
-                          {pagoDeudaSaving ? 'Registrando...' : 'Registrar pago'}
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                </div>
-              </div>
-              <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4 text-sm">
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-slate-200">
-                    Metricas avanzadas
-                  </h4>
-                  <div>
-                    Frecuencia prom. entre compras:{' '}
-                    <span className="text-slate-200">
-                      {resumenSeleccionado.frecuenciaPromedioDias != null
-                        ? `${resumenSeleccionado.frecuenciaPromedioDias.toFixed(1)} dÃ­as`
-                        : '-'}
-                    </span>
-                  </div>
-                  <div>
-                    Ranking (top clientes):{' '}
-                    <span className="text-slate-200">
-                      {resumenSeleccionado.rankingPosicion
-                        ? `#${resumenSeleccionado.rankingPosicion} de ${resumenSeleccionado.rankingTotal}`
-                        : resumenSeleccionado.rankingTotal
-                        ? 'Fuera del top cargado'
-                        : '-'}
-                    </span>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-slate-200">
-                    CRM
-                  </h4>
-                  <div>
-                    Oportunidades abiertas:{' '}
-                    <span className="text-slate-200">{crmOpps.length}</span>
-                  </div>
-                  <div>
-                    Actividades pendientes:{' '}
-                    <span className="text-slate-200">{crmActs.length}</span>
-                  </div>
-                  <div className="mt-1">
+          <div className="text-xs text-slate-400">
+            {deletedClientes.length} elemento{deletedClientes.length === 1 ? '' : 's'}
+          </div>
+        </div>
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-slate-400">
+              <tr>
+                <th className="py-2">Nombre</th>
+                <th className="py-2">Email</th>
+                <th className="py-2">Eliminado</th>
+                <th className="py-2">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-200">
+              {deletedClientes.map((cliente) => (
+                <tr key={cliente.id} className="border-t border-white/10 hover:bg-white/5">
+                  <td className="py-2">
+                    {cliente.nombre} {cliente.apellido}
+                  </td>
+                  <td className="py-2">{cliente.email || '-'}</td>
+                  <td className="py-2">
+                    {cliente.deleted_at ? new Date(cliente.deleted_at).toLocaleString() : '-'}
+                  </td>
+                  <td className="py-2">
                     <button
                       type="button"
-                      onClick={crearActividadRapida}
-                      className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs"
+                      className="rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200 transition hover:bg-emerald-500/20"
+                      onClick={() => restaurarCliente(cliente)}
                     >
-                      Nueva actividad rapida
+                      Restaurar
                     </button>
-                  </div>
-                  <div className="mt-2">
-                    <div className="text-xs text-slate-400 uppercase mb-1">
-                      Oportunidades
-                    </div>
-                    <ul className="space-y-1 text-xs text-slate-200">
-                      {crmOpps.slice(0, 5).map((o) => (
-                        <li key={o.id}>
-                          <span className="font-medium">{o.titulo}</span>{' '}
-                          <span className="text-slate-400">
-                            Â· {o.fase}
-                            {typeof o.valor_estimado === 'number'
-                              ? ` Â· $${o.valor_estimado.toFixed(0)}`
-                              : ''}
-                          </span>
-                        </li>
-                      ))}
-                      {!crmOpps.length && (
-                        <li className="text-slate-400">Sin oportunidades abiertas</li>
-                      )}
-                    </ul>
-                  </div>
-                  <div className="mt-3">
-                    <div className="text-xs text-slate-400 uppercase mb-1">
-                      Actividades pendientes
-                    </div>
-                    <ul className="space-y-1 text-xs text-slate-200">
-                      {crmActs.slice(0, 5).map((a) => (
-                        <li key={a.id}>
-                          <span className="font-medium">{a.tipo}</span>{' '}
-                          <span>- {a.asunto}</span>{' '}
-                          <span className="text-slate-400">
-                            {a.fecha_hora
-                              ? `Â· ${new Date(a.fecha_hora).toLocaleString()}`
-                              : ''}{' '}
-                            Â· {a.estado}
-                          </span>
-                        </li>
-                      ))}
-                      {!crmActs.length && (
-                        <li className="text-slate-400">Sin actividades pendientes</li>
-                      )}
-                    </ul>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-semibold text-slate-200">
-                    Cobranzas inteligentes
-                  </h4>
-                  <button
-                    type="button"
-                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/10 text-xs"
-                    onClick={() => loadCobranzaCliente(selectedCliente.id)}
-                    disabled={cobranzaLoading}
-                  >
-                    {cobranzaLoading ? 'Actualizando...' : 'Actualizar'}
-                  </button>
-                </div>
-
-                {cobranzaError && (
-                  <div className="text-xs text-rose-300">{cobranzaError}</div>
-                )}
-
-                {cobranzaLoading ? (
-                  <div className="text-sm text-slate-400">Cargando modulo de cobranzas...</div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                      <div className="p-3 rounded-lg border border-white/10 bg-white/5">
-                        <div className="text-[11px] uppercase text-slate-400 mb-1">
-                          Riesgo mora
-                        </div>
-                        {riesgoMora ? (
-                          <div className="space-y-1">
-                            <div>
-                              <span
-                                className={`inline-flex px-2 py-0.5 rounded-full text-xs border ${riesgoClass(
-                                  riesgoMora.bucket
-                                )}`}
-                              >
-                                {riesgoLabel(riesgoMora.bucket)}
-                              </span>
-                            </div>
-                            <div className="text-slate-200">
-                              Score: <span className="font-semibold">{riesgoMora.score}</span>/100
-                            </div>
-                            <div className="text-slate-300 text-xs">
-                              Deuda +90: ${Number(riesgoMora.deuda_mas_90 || 0).toFixed(2)}
-                            </div>
-                            <div className="text-slate-300 text-xs">
-                              Atraso promedio: {Number(riesgoMora.dias_promedio_atraso || 0).toFixed(0)} dias
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-slate-400">Sin score disponible</div>
-                        )}
-                      </div>
-
-                      <div className="p-3 rounded-lg border border-white/10 bg-white/5">
-                        <div className="text-[11px] uppercase text-slate-400 mb-1">
-                          Promesas
-                        </div>
-                        <div className="text-slate-200 text-lg font-semibold">
-                          {promesasCobranza.length}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                          Pendientes:{' '}
-                          {promesasCobranza.filter((p) => p.estado === 'pendiente').length}
-                        </div>
-                      </div>
-
-                      <div className="p-3 rounded-lg border border-white/10 bg-white/5">
-                        <div className="text-[11px] uppercase text-slate-400 mb-1">
-                          Recordatorios
-                        </div>
-                        <div className="text-slate-200 text-lg font-semibold">
-                          {recordatoriosCobranza.length}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                          Pendientes:{' '}
-                          {recordatoriosCobranza.filter((r) => r.status === 'pending').length}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                      <div className="p-3 rounded-lg border border-white/10 bg-white/5 space-y-3">
-                        <div className="text-sm text-slate-200 font-medium">
-                          Promesas de pago
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                            placeholder="Monto"
-                            value={promesaForm.monto}
-                            onChange={(e) =>
-                              setPromesaForm((prev) => ({ ...prev, monto: e.target.value }))
-                            }
-                          />
-                          <input
-                            type="date"
-                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                            value={promesaForm.fecha}
-                            onChange={(e) =>
-                              setPromesaForm((prev) => ({ ...prev, fecha: e.target.value }))
-                            }
-                          />
-                          <select
-                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                            value={promesaForm.canal}
-                            onChange={(e) =>
-                              setPromesaForm((prev) => ({
-                                ...prev,
-                                canal: e.target.value as 'whatsapp' | 'email' | 'telefono' | 'manual',
-                              }))
-                            }
-                          >
-                            <option value="whatsapp">WhatsApp</option>
-                            <option value="email">Email</option>
-                            <option value="telefono">Telefono</option>
-                            <option value="manual">Manual</option>
-                          </select>
-                          <button
-                            type="button"
-                            onClick={crearPromesaCobranza}
-                            className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-xs disabled:opacity-60"
-                            disabled={promesaSaving}
-                          >
-                            {promesaSaving ? 'Guardando...' : 'Crear promesa'}
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                          placeholder="Notas (opcional)"
-                          value={promesaForm.notas}
-                          onChange={(e) =>
-                            setPromesaForm((prev) => ({ ...prev, notas: e.target.value }))
-                          }
-                        />
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full text-xs">
-                            <thead className="text-left text-slate-400">
-                              <tr>
-                                <th className="py-1 pr-2">Fecha</th>
-                                <th className="py-1 pr-2">Monto</th>
-                                <th className="py-1 pr-2">Canal</th>
-                                <th className="py-1 pr-2">Estado</th>
-                              </tr>
-                            </thead>
-                            <tbody className="text-slate-200">
-                              {promesasCobranza.map((p) => (
-                                <tr key={p.id} className="border-t border-white/10">
-                                  <td className="py-1 pr-2">
-                                    {p.fecha_promesa
-                                      ? new Date(p.fecha_promesa).toLocaleDateString()
-                                      : '-'}
-                                  </td>
-                                  <td className="py-1 pr-2">${Number(p.monto_prometido || 0).toFixed(2)}</td>
-                                  <td className="py-1 pr-2">{p.canal_preferido}</td>
-                                  <td className="py-1 pr-2">
-                                    <select
-                                      className="bg-slate-800 border border-white/10 rounded px-1 py-0.5 text-xs"
-                                      value={p.estado}
-                                      onChange={(e) =>
-                                        actualizarEstadoPromesa(
-                                          p.id,
-                                          e.target.value as PromesaCobranza['estado']
-                                        )
-                                      }
-                                    >
-                                      <option value="pendiente">pendiente</option>
-                                      <option value="cumplida">cumplida</option>
-                                      <option value="incumplida">incumplida</option>
-                                      <option value="cancelada">cancelada</option>
-                                    </select>
-                                  </td>
-                                </tr>
-                              ))}
-                              {!promesasCobranza.length && (
-                                <tr>
-                                  <td colSpan={4} className="py-2 text-slate-400">
-                                    Sin promesas registradas
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
-                      <div className="p-3 rounded-lg border border-white/10 bg-white/5 space-y-3">
-                        <div className="text-sm text-slate-200 font-medium">
-                          Recordatorios
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                          <select
-                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                            value={recordatorioForm.canal}
-                            onChange={(e) =>
-                              setRecordatorioForm((prev) => ({
-                                ...prev,
-                                canal: e.target.value as 'whatsapp' | 'email' | 'manual',
-                              }))
-                            }
-                          >
-                            <option value="whatsapp">WhatsApp</option>
-                            <option value="email">Email</option>
-                            <option value="manual">Manual</option>
-                          </select>
-                          <input
-                            type="text"
-                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                            placeholder="Destino"
-                            value={recordatorioForm.destino}
-                            onChange={(e) =>
-                              setRecordatorioForm((prev) => ({ ...prev, destino: e.target.value }))
-                            }
-                          />
-                          <input
-                            type="text"
-                            className="bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                            placeholder="Template"
-                            value={recordatorioForm.template_code}
-                            onChange={(e) =>
-                              setRecordatorioForm((prev) => ({
-                                ...prev,
-                                template_code: e.target.value,
-                              }))
-                            }
-                          />
-                          <button
-                            type="button"
-                            onClick={crearRecordatorioManual}
-                            className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200 text-xs disabled:opacity-60"
-                            disabled={recordatorioSaving}
-                          >
-                            {recordatorioSaving ? 'Guardando...' : 'Crear recordatorio'}
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          className="w-full bg-slate-800 border border-white/10 rounded px-2 py-1 text-sm text-slate-100"
-                          placeholder="Mensaje corto"
-                          value={recordatorioForm.mensaje}
-                          onChange={(e) =>
-                            setRecordatorioForm((prev) => ({ ...prev, mensaje: e.target.value }))
-                          }
-                        />
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full text-xs">
-                            <thead className="text-left text-slate-400">
-                              <tr>
-                                <th className="py-1 pr-2">Fecha</th>
-                                <th className="py-1 pr-2">Canal</th>
-                                <th className="py-1 pr-2">Destino</th>
-                                <th className="py-1 pr-2">Estado</th>
-                              </tr>
-                            </thead>
-                            <tbody className="text-slate-200">
-                              {recordatoriosCobranza.map((r) => (
-                                <tr key={r.id} className="border-t border-white/10">
-                                  <td className="py-1 pr-2">
-                                    {r.scheduled_at
-                                      ? new Date(r.scheduled_at).toLocaleString()
-                                      : '-'}
-                                  </td>
-                                  <td className="py-1 pr-2">{r.canal}</td>
-                                  <td className="py-1 pr-2">{r.destino || '-'}</td>
-                                  <td className="py-1 pr-2">{recordatorioStatusLabel(r.status)}</td>
-                                </tr>
-                              ))}
-                              {!recordatoriosCobranza.length && (
-                                <tr>
-                                  <td colSpan={4} className="py-2 text-slate-400">
-                                    Sin recordatorios registrados
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </>
-          )}
+                  </td>
+                </tr>
+              ))}
+              {!deletedClientes.length && (
+                <tr>
+                  <td className="py-4 text-slate-400" colSpan={4}>
+                    No hay clientes en papelera.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
 
-      {showHistorialModal && selectedCliente && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-2 sm:p-4">
-          <div className="app-card mobile-modal-card w-full max-w-4xl p-4 space-y-4">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <div className="text-sm text-slate-400">Historial de pagos y entregas</div>
-                <div className="text-base text-slate-100">
-                  Cliente #{selectedCliente.id} - {selectedCliente.nombre}
-                  {selectedCliente.apellido ? ` ${selectedCliente.apellido}` : ''}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20 text-xs"
-                onClick={() => setShowHistorialModal(false)}
-                disabled={historialDeleting}
-              >
-                Cerrar
-              </button>
-            </div>
-            {historialError && (
-              <div className="text-xs text-rose-300">{historialError}</div>
-            )}
-            {historialLoading ? (
-              <div className="py-6 text-center text-slate-400">Cargando historial...</div>
-            ) : isMobile ? (
-              <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-                {historialPagos.map((h) => (
-                  <article key={`${h.tipo}-${h.id}`} className="app-panel p-3 text-xs space-y-1">
-                    <div className="text-slate-100">
-                      {h.tipo === 'pago_venta'
-                        ? 'Pago venta'
-                        : h.tipo === 'pago_cuenta'
-                          ? 'Pago cuenta corriente'
-                          : h.tipo === 'pago_deuda_inicial'
-                            ? 'Pago deuda'
-                            : 'Entrega'}
-                    </div>
-                    <div className="text-slate-400">
-                      {h.fecha ? new Date(h.fecha).toLocaleString() : '-'}
-                    </div>
-                    <div className="text-slate-300">
-                      {h.tipo === 'pago_venta'
-                        ? h.venta_id
-                          ? `Venta #${h.venta_id}`
-                          : '-'
-                        : h.tipo === 'pago_cuenta'
-                          ? 'Cuenta corriente'
-                          : h.tipo === 'entrega_venta'
-                            ? h.venta_id
-                              ? `Entrega venta #${h.venta_id}`
-                              : 'Entrega'
-                            : 'Pago deuda'}
-                    </div>
-                    <div className="text-slate-300">
-                      {h.detalle
-                        ? h.tipo === 'entrega_venta'
-                          ? `Se entrego ${h.detalle}`
-                          : h.detalle
-                        : '-'}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="text-slate-100">
-                        {h.monto != null ? `$${Number(h.monto || 0).toFixed(2)}` : '-'}
-                      </div>
-                      {h.tipo === 'entrega_venta' ? (
-                        <span className="text-slate-500">-</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 text-[11px]"
-                          onClick={() => eliminarPagoHistorial(h)}
-                          disabled={historialDeleting}
-                        >
-                          Eliminar
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))}
-                {!historialPagos.length && (
-                  <div className="app-panel p-3 text-xs text-slate-400">
-                    Sin movimientos registrados
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="overflow-x-auto text-xs md:text-sm max-h-[60vh]">
-                <table className="min-w-full">
-                  <thead className="text-left text-slate-400">
-                    <tr>
-                      <th className="py-1 pr-2">Fecha</th>
-                      <th className="py-1 pr-2">Tipo</th>
-                      <th className="py-1 pr-2">Referencia</th>
-                      <th className="py-1 pr-2">Monto</th>
-                      <th className="py-1 pr-2">Detalle</th>
-                      <th className="py-1 pr-2">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-200">
-                    {historialPagos.map((h) => (
-                      <tr key={`${h.tipo}-${h.id}`} className="border-t border-white/10 hover:bg-white/5">
-                        <td className="py-1 pr-2">
-                          {h.fecha ? new Date(h.fecha).toLocaleString() : '-'}
-                        </td>
-                        <td className="py-1 pr-2">
-                          {h.tipo === 'pago_venta'
-                            ? 'Pago venta'
-                            : h.tipo === 'pago_cuenta'
-                              ? 'Pago cuenta corriente'
-                              : h.tipo === 'pago_deuda_inicial'
-                                ? 'Pago deuda'
-                                : 'Entrega'}
-                        </td>
-                        <td className="py-1 pr-2">
-                          {h.tipo === 'pago_venta'
-                            ? h.venta_id
-                              ? `Venta #${h.venta_id}`
-                              : '-'
-                            : h.tipo === 'pago_cuenta'
-                              ? 'Cuenta corriente'
-                              : h.tipo === 'entrega_venta'
-                                ? h.venta_id
-                                  ? `Entrega venta #${h.venta_id}`
-                                  : 'Entrega'
-                                : 'Pago deuda'}
-                        </td>
-                        <td className="py-1 pr-2">
-                          {h.monto != null ? `$${Number(h.monto || 0).toFixed(2)}` : '-'}
-                        </td>
-                        <td className="py-1 pr-2">
-                          {h.detalle
-                            ? h.tipo === 'entrega_venta'
-                              ? `Se entrego ${h.detalle}`
-                              : h.detalle
-                            : '-'}
-                        </td>
-                        <td className="py-1 pr-2">
-                          {h.tipo === 'entrega_venta' ? (
-                            <span className="text-slate-500">-</span>
-                          ) : (
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 text-[11px]"
-                              onClick={() => eliminarPagoHistorial(h)}
-                              disabled={historialDeleting}
-                            >
-                              Eliminar
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {!historialPagos.length && (
-                      <tr>
-                        <td className="py-2 text-slate-400" colSpan={6}>
-                          Sin movimientos registrados
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {selectedCliente && (
+          <ClienteDetallePanel
+            selectedCliente={selectedCliente}
+            detalleLoading={detalleLoading}
+            detalleError={detalleError}
+            isMobile={isMobile}
+            deudaUmbralRojo={deudaUmbralRojo}
+            resumenSeleccionado={resumenSeleccionado}
+            crmOpps={crmOpps}
+            crmActs={crmActs}
+            clienteAcceso={clienteAcceso}
+            accessError={accessError}
+            accessSaving={accessSaving}
+            historialCuenta={historialCuenta}
+            ventasPendientes={ventasPendientes}
+            saldoDeudaAnterior={saldoDeudaAnterior}
+            pagoDeudaForm={pagoDeudaForm}
+            pagoMetodos={pagoMetodos}
+            pagoDeudaSaving={pagoDeudaSaving}
+            pagoDeudaError={pagoDeudaError}
+            metodosPago={metodosPago}
+            metodosPagoLoading={metodosPagoLoading}
+            metodosPagoError={metodosPagoError}
+            totalPagoMetodos={totalPagoMetodos}
+            canSubmitPago={canSubmitPago}
+            riesgoMora={riesgoMora}
+            promesasCobranza={promesasCobranza}
+            recordatoriosCobranza={recordatoriosCobranza}
+            cobranzaLoading={cobranzaLoading}
+            cobranzaError={cobranzaError}
+            promesaForm={promesaForm}
+            promesaSaving={promesaSaving}
+            recordatorioForm={recordatorioForm}
+            recordatorioSaving={recordatorioSaving}
+            showHistorialModal={showHistorialModal}
+            historialPagos={historialPagos}
+            historialLoading={historialLoading}
+            historialError={historialError}
+            historialDeleting={historialDeleting}
+            onClose={() => setSelectedCliente(null)}
+            onAbrirHistorial={abrirHistorialPagos}
+            onConfigurarAcceso={configurarAccesoCliente}
+            onCrearActividadRapida={crearActividadRapida}
+            onPagoDeudaFormChange={(changes) => setPagoDeudaForm((prev) => ({ ...prev, ...changes }))}
+            onUpdatePagoMetodo={updatePagoMetodo}
+            onAddPagoMetodoRow={addPagoMetodoRow}
+            onRemovePagoMetodoRow={removePagoMetodoRow}
+            onRegistrarPago={(e) => { e.preventDefault(); registrarPagoDeuda(); }}
+            onLoadCobranza={() => loadCobranzaCliente(selectedCliente.id)}
+            onPromesaFormChange={(changes) => setPromesaForm((prev) => ({ ...prev, ...changes }))}
+            onCrearPromesa={crearPromesaCobranza}
+            onActualizarEstadoPromesa={actualizarEstadoPromesa}
+            onRecordatorioFormChange={(changes) => setRecordatorioForm((prev) => ({ ...prev, ...changes }))}
+            onCrearRecordatorio={crearRecordatorioManual}
+            onCloseHistorialModal={() => setShowHistorialModal(false)}
+            onEliminarPagoHistorial={eliminarPagoHistorial}
+          />
+        )}
+
+      
 
 
     </div>

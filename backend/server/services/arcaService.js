@@ -215,6 +215,101 @@ function validateKeyPair(certPem, keyPem, passphrase) {
   return Buffer.compare(certDer, keyDer) === 0;
 }
 
+function detectCertificateExpiration(certPem) {
+  try {
+    const certificate = new crypto.X509Certificate(certPem);
+    const parsed = certificate.validTo ? new Date(certificate.validTo) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().slice(0, 10);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAlicuotasIva(value) {
+  let input = value;
+  if (typeof input === 'string') {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      input = String(input)
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+  const normalized = Array.from(
+    new Set(
+      (Array.isArray(input) ? input : [0, 10.5, 21, 27])
+        .map((item) => round2(Number(item)))
+        .filter((item) => Number.isFinite(item) && item >= 0)
+    )
+  ).sort((a, b) => a - b);
+  return normalized.length ? normalized : [0, 10.5, 21, 27];
+}
+
+function parseDefaultTipoComprobante(value) {
+  const raw = String(value || '').trim().toUpperCase();
+  return ['A', 'B', 'C'].includes(raw) ? raw : null;
+}
+
+function resolveConfiguredComprobante({ configDefault, emisorCondicion, receptorCondicion }) {
+  const auto = resolveComprobanteTipo({ emisorCondicion, receptorCondicion });
+  const preferred = parseDefaultTipoComprobante(configDefault);
+  if (!preferred) return auto;
+
+  const emisor = normalizeCondicionIva(emisorCondicion);
+  const receptor = normalizeCondicionIva(receptorCondicion);
+
+  if (preferred === 'A' && (emisor !== 'responsable_inscripto' || receptor !== 'responsable_inscripto')) {
+    return auto;
+  }
+  if (preferred === 'C' && emisor === 'responsable_inscripto') {
+    return auto;
+  }
+  return preferred;
+}
+
+async function extractPemFromP12({ buffer, passphrase }) {
+  ensureOpenSSL();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-p12-'));
+  const p12Path = path.join(dir, 'certificado.p12');
+  const certPath = path.join(dir, 'cert.pem');
+  const keyPath = path.join(dir, 'key.pem');
+
+  try {
+    fs.writeFileSync(p12Path, buffer);
+    const passArg = `pass:${passphrase || ''}`;
+
+    const certRes = spawnSync(
+      'openssl',
+      ['pkcs12', '-in', p12Path, '-clcerts', '-nokeys', '-out', certPath, '-passin', passArg],
+      { encoding: 'utf8' }
+    );
+    if (certRes.status !== 0) {
+      throw new Error(certRes.stderr || certRes.error?.message || 'No se pudo extraer el certificado del .p12');
+    }
+
+    const keyRes = spawnSync(
+      'openssl',
+      ['pkcs12', '-in', p12Path, '-nocerts', '-nodes', '-out', keyPath, '-passin', passArg],
+      { encoding: 'utf8' }
+    );
+    if (keyRes.status !== 0) {
+      throw new Error(keyRes.stderr || keyRes.error?.message || 'No se pudo extraer la clave privada del .p12');
+    }
+
+    return {
+      certPem: fs.readFileSync(certPath, 'utf8'),
+      keyPem: fs.readFileSync(keyPath, 'utf8'),
+    };
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
 function soapRequest(url, xml, soapAction) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
@@ -562,6 +657,14 @@ async function wsfeDummy(config) {
 }
 
 async function testConnection() {
+  // Modo sandbox: simular conexión exitosa sin certificado real
+  if (process.env.ARCA_SANDBOX === 'true') {
+    return {
+      sandbox: true,
+      token_expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      dummy: { appServer: 'sandbox', dbServer: 'sandbox', authServer: 'sandbox' },
+    };
+  }
   const config = await repo.getConfig();
   if (!config) throw new Error('Config ARCA no encontrada');
   const certPem = await decryptString(config.certificado_pem);
@@ -685,7 +788,14 @@ async function emitirFacturaDesdeVenta({
     emisorCondicion: config.condicion_iva,
     receptorCondicion: venta.condicion_iva,
   });
-  const tipoComprobante = tipoOverride || tipoAuto;
+  const tipoComprobante =
+    tipoOverride ||
+    resolveConfiguredComprobante({
+      configDefault: config.default_tipo_comprobante,
+      emisorCondicion: config.condicion_iva,
+      receptorCondicion: venta.condicion_iva,
+    }) ||
+    tipoAuto;
 
   const conceptoFinal = [1, 2, 3].includes(Number(concepto)) ? Number(concepto) : 1;
   if (conceptoFinal !== 1) {
@@ -769,6 +879,78 @@ async function emitirFacturaDesdeVenta({
   if (facturaExistente && facturaExistente.request_hash && facturaExistente.request_hash !== hash) {
     throw new Error('La venta ya tiene una emision previa diferente');
   }
+
+  // ── MODO SANDBOX ─────────────────────────────────────────────
+  // Cuando ARCA_SANDBOX=true, se simula el proceso completo sin
+  // llamar a AFIP. Útil para desarrollo, demos y pruebas sin
+  // certificado real. El CAE generado es FICTICIO y no tiene
+  // validez fiscal. La factura queda guardada con estado='sandbox'.
+  if (process.env.ARCA_SANDBOX === 'true') {
+    const sandboxNumber = Date.now() % 100000 + 1;
+    const sandboxCae = `${formatDateYYYYMMDD(new Date())}${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`;
+    const sandboxCaeVto = formatDateYYYYMMDD(new Date(Date.now() + 10 * 24 * 60 * 60 * 1000));
+    const sandboxNumeroFactura = `${String(puntoVenta.punto_venta).padStart(4, '0')}-${String(sandboxNumber).padStart(8, '0')}`;
+
+    const sandboxQr = buildQrData({
+      fecha: venta.fecha || new Date(),
+      cuit: config.cuit || '20111111112',
+      puntoVenta: puntoVenta.punto_venta,
+      tipoComprobante,
+      numero: sandboxNumber,
+      impTotal,
+      moneda: 'PES',
+      cotiz: 1,
+      docTipo: docInfo.tipo,
+      docNro: docNumeroDigits || '0',
+      cae: sandboxCae,
+    });
+
+    const sandboxSnapshot = {
+      sandbox: true,
+      emisor: { cuit: config.cuit, razon_social: config.razon_social },
+      comprobante: { tipo: tipoComprobante, punto_venta: puntoVenta.punto_venta, numero: sandboxNumeroFactura },
+      totales: { imp_total: impTotal, imp_neto: totales.impNeto, imp_iva: totales.impIva },
+      cae: { codigo: sandboxCae, vencimiento: sandboxCaeVto },
+      qr: { url: sandboxQr.url, payload: sandboxQr.payload },
+    };
+
+    const factura = await repo.upsertFacturaForVenta({
+      venta_id: ventaId,
+      numero_factura: sandboxNumeroFactura,
+      fecha_emision: new Date(),
+      tipo_comprobante: tipoComprobante,
+      punto_venta: puntoVenta.punto_venta,
+      cae: sandboxCae,
+      cae_vto: sandboxCaeVto,
+      estado: 'sandbox',
+      error: null,
+      total: impTotal,
+      moneda: 'PES',
+      qr_data: sandboxQr.url,
+      response_json: { sandbox: true, msg: 'Modo sandbox activo — CAE ficticio' },
+      request_hash: hash,
+      intentos: 1,
+      ultimo_intento: new Date().toISOString(),
+      usuario_id: usuarioId || null,
+      concepto: conceptoFinal,
+      doc_tipo: docInfo.tipo,
+      doc_nro: docNumeroDigits || '0',
+      imp_neto: totales.impNeto || 0,
+      imp_iva: totales.impIva || 0,
+      imp_op_ex: totales.impOpEx || 0,
+      imp_trib: 0,
+      imp_tot_conc: totales.impTotConc || 0,
+      mon_id: 'PES',
+      mon_cotiz: 1,
+      fecha_serv_desde: conceptoFinal !== 1 ? fecha_serv_desde : null,
+      fecha_serv_hasta: conceptoFinal !== 1 ? fecha_serv_hasta : null,
+      fecha_vto_pago: conceptoFinal !== 1 ? fecha_vto_pago : null,
+      snapshot_json: sandboxSnapshot,
+    });
+
+    return { factura, already: false, sandbox: true };
+  }
+  // ─────────────────────────────────────────────────────────────
 
   return await withPvLock(puntoVenta.punto_venta, async () => {
     const lastResp = await callWsfe(
@@ -1173,9 +1355,60 @@ async function saveConfig(data) {
     permitir_sin_pago: data.permitir_sin_pago,
     precios_incluyen_iva: data.precios_incluyen_iva,
     activo: data.activo,
+    default_tipo_comprobante:
+      data.default_tipo_comprobante !== undefined
+        ? parseDefaultTipoComprobante(data.default_tipo_comprobante)
+        : undefined,
+    alicuotas_iva_json:
+      data.alicuotas_iva !== undefined || data.alicuotas_iva_json !== undefined
+        ? JSON.stringify(normalizeAlicuotasIva(data.alicuotas_iva ?? data.alicuotas_iva_json))
+        : undefined,
+    certificado_nombre_archivo: data.certificado_nombre_archivo,
+    p12_subido_en: data.p12_subido_en,
+    certificado_vto:
+      data.certificado_vto !== undefined
+        ? data.certificado_vto
+        : data.certificado_pem
+          ? detectCertificateExpiration(data.certificado_pem)
+          : undefined,
     ...encrypted,
   };
   return repo.upsertConfig(payload);
+}
+
+async function importP12Certificate({ fileBuffer, passphrase, originalName }) {
+  const existing = await repo.getConfig();
+  if (!existing?.cuit) {
+    throw new Error('Guarda primero el CUIT y la configuracion fiscal antes de subir el .p12');
+  }
+
+  const { certPem, keyPem } = await extractPemFromP12({
+    buffer: fileBuffer,
+    passphrase,
+  });
+
+  return saveConfig({
+    cuit: existing.cuit,
+    razon_social: existing.razon_social,
+    condicion_iva: existing.condicion_iva,
+    domicilio_fiscal: existing.domicilio_fiscal,
+    provincia: existing.provincia,
+    localidad: existing.localidad,
+    codigo_postal: existing.codigo_postal,
+    ambiente: existing.ambiente,
+    permitir_sin_entrega: Boolean(existing.permitir_sin_entrega),
+    permitir_sin_pago: Boolean(existing.permitir_sin_pago),
+    precios_incluyen_iva:
+      existing.precios_incluyen_iva == null ? true : Boolean(existing.precios_incluyen_iva),
+    activo: Boolean(existing.activo),
+    default_tipo_comprobante: existing.default_tipo_comprobante,
+    alicuotas_iva_json: existing.alicuotas_iva_json,
+    certificado_pem: certPem,
+    clave_privada_pem: keyPem,
+    passphrase: '',
+    certificado_nombre_archivo: originalName || null,
+    p12_subido_en: new Date().toISOString(),
+  });
 }
 
 function sanitizeConfig(config) {
@@ -1197,10 +1430,16 @@ function sanitizeConfig(config) {
     has_certificado: Boolean(config.certificado_pem),
     has_clave_privada: Boolean(config.clave_privada_pem),
     certificado_vto: config.certificado_vto || null,
+    certificado_nombre_archivo: config.certificado_nombre_archivo || null,
+    p12_subido_en: config.p12_subido_en || null,
+    default_tipo_comprobante: parseDefaultTipoComprobante(config.default_tipo_comprobante) || 'B',
+    alicuotas_iva: normalizeAlicuotasIva(config.alicuotas_iva_json),
   };
 }
 
 module.exports = {
+  importP12Certificate,
+  normalizeAlicuotasIva,
   saveConfig,
   sanitizeConfig,
   testConnection,

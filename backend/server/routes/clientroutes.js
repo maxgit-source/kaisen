@@ -4,6 +4,8 @@ const ctrl = require('../controllers/clientcontroller');
 const clientAuthCtrl = require('../controllers/clientauthcontroller');
 const auth = require('../middlewares/authmiddleware');
 const { requireRole } = require('../middlewares/roleMiddleware');
+const { uploadSingle } = require('../middlewares/uploadMiddleware');
+const { uploadLimiter } = require('../middlewares/security');
 
 // Auth clientes (publico)
 router.post('/clientes/registro', clientAuthCtrl.register);
@@ -12,9 +14,19 @@ router.post('/clientes/refresh', clientAuthCtrl.refreshToken);
 router.post('/clientes/logout', clientAuthCtrl.logout);
 
 router.get('/clientes', auth, ctrl.list);
+router.post(
+  '/clientes/importar-excel',
+  uploadLimiter,
+  auth,
+  requireRole(['admin', 'gerente']),
+  uploadSingle('file'),
+  ctrl.importExcel
+);
+router.get('/clientes/papelera', auth, requireRole(['admin', 'gerente']), ctrl.listDeleted);
 router.post('/clientes', auth, requireRole(['admin','gerente','vendedor']), ctrl.create);
 router.put('/clientes/:id', auth, requireRole(['admin','gerente','vendedor']), ctrl.update);
 router.delete('/clientes/:id', auth, requireRole(['admin']), ctrl.remove);
+router.put('/clientes/:id/restaurar', auth, requireRole(['admin', 'gerente']), ctrl.restore);
 
 // Credenciales de acceso de cliente (admin)
 router.get('/clientes/:id/credenciales', auth, requireRole(['admin', 'gerente']), clientAuthCtrl.getAccessStatus);

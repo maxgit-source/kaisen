@@ -1,5 +1,27 @@
 const { body, validationResult } = require('express-validator');
+const { z } = require('zod');
 const repo = require('../db/repositories/salesRepository');
+const logger = require('../lib/logger');
+const { sendBigSaleAlert } = require('../services/alertService');
+
+const VentaItemSchema = z.object({
+  producto_id: z.coerce.number().int().positive('producto_id requerido'),
+  cantidad: z.coerce.number().positive('cantidad invalida').max(9999),
+  precio_unitario: z.coerce.number().positive('precio_unitario invalido').optional(),
+});
+
+const VentaSchema = z.object({
+  cliente_id: z.coerce.number().int().positive('cliente_id requerido'),
+  fecha: z.string().trim().optional(),
+  descuento: z.coerce.number().min(0).optional().default(0),
+  impuestos: z.coerce.number().min(0).optional().default(0),
+  deposito_id: z.coerce.number().int().positive().optional(),
+  items: z.array(VentaItemSchema).min(1, 'Debe enviar items'),
+  es_reserva: z.boolean().optional().default(false),
+  caja_tipo: z.enum(['home_office', 'sucursal']).optional(),
+  referido_codigo: z.string().trim().min(4).max(40).optional(),
+  price_list_type: z.enum(['local', 'distribuidor', 'final']).optional(),
+});
 
 const validateCreate = [
   body('cliente_id').isInt({ gt: 0 }).withMessage('cliente_id requerido'),
@@ -23,9 +45,30 @@ const validateCancel = [
 async function create(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const parsed = VentaSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'Datos invalidos',
+      code: 'VALIDATION_ERROR',
+      errors: parsed.error.issues.map((issue) => ({
+        param: issue.path.join('.') || 'body',
+        msg: issue.message,
+      })),
+    });
+  }
   try {
-    const { cliente_id, fecha, descuento, impuestos, items, deposito_id, es_reserva, caja_tipo, price_list_type } = req.body;
-    const referido_codigo = req.body?.referido_codigo;
+    const {
+      cliente_id,
+      fecha,
+      descuento,
+      impuestos,
+      items,
+      deposito_id,
+      es_reserva,
+      caja_tipo,
+      price_list_type,
+      referido_codigo,
+    } = parsed.data;
     try {
       if (process.env.NODE_ENV !== 'production') {
         console.debug('[ventas] create payload', { cliente_id, fecha, descuento, impuestos, items, deposito_id });
@@ -46,13 +89,21 @@ async function create(req, res) {
       price_list_type,
     });
     res.status(201).json(r);
+
+    // Alerta de venta grande (fire-and-forget, no bloquea la respuesta al cliente).
+    if (r?.total) {
+      sendBigSaleAlert({ total: r.total }).catch(() => {});
+    }
   } catch (e) {
     const code = e.status || 500;
     if (process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
-      console.error('[ventas] create error', e?.message || e);
+      logger.error({ err: e?.message || e }, '[ventas] create error');
     }
-    res.status(code).json({ error: e.message || 'No se pudo crear la venta' });
+    res.status(code).json({
+      error: e.message || 'No se pudo crear la venta',
+      code: e.code || (code === 409 ? 'STOCK_INSUFICIENTE' : 'VENTA_ERROR'),
+    });
   }
 }
 

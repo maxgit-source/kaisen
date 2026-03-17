@@ -43,6 +43,7 @@ async function list(req, res) {
       role: req.query.role,
       limit: req.query.limit,
       offset: req.query.offset,
+      includeDeleted: String(req.query.include_deleted || '') === '1',
     });
     res.json(rows);
   } catch (e) {
@@ -176,11 +177,65 @@ async function setUserDepositos(req, res) {
   }
 }
 
+async function listDeleted(req, res) {
+  try {
+    const rows = await users.list({
+      q: req.query.q,
+      role: req.query.role,
+      limit: req.query.limit,
+      offset: req.query.offset,
+      onlyDeleted: true,
+    });
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo obtener la papelera de usuarios' });
+  }
+}
+
+async function remove(req, res) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'ID invalido' });
+  }
+
+  if (Number(req.user?.sub || 0) === id) {
+    return res.status(400).json({
+      error: 'No puedes enviarte a papelera a ti mismo desde esta sesion',
+      code: 'SELF_DELETE_FORBIDDEN',
+    });
+  }
+
+  try {
+    const deleted = await users.softDelete(id);
+    if (!deleted) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ message: 'Usuario enviado a papelera' });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo eliminar el usuario' });
+  }
+}
+
+async function restore(req, res) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'ID invalido' });
+  }
+  try {
+    const restored = await users.restore(id);
+    if (!restored) return res.status(404).json({ error: 'Usuario no encontrado en papelera' });
+    res.json({ message: 'Usuario restaurado' });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo restaurar el usuario' });
+  }
+}
+
 module.exports = {
   list,
   listVendedores,
   create: [...validateCreate, create],
   update: [...validateUpdate, update],
+  listDeleted,
+  remove,
+  restore,
   roles,
   sellerPerformance,
   getUserDepositos,

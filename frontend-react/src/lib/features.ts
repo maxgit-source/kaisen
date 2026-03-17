@@ -9,7 +9,8 @@ export type FeatureKey =
   | 'aprobaciones'
   | 'crm'
   | 'postventa'
-  | 'multideposito';
+  | 'multideposito'
+  | 'integraciones';
 
 export const FEATURE_LIST: { key: FeatureKey; label: string }[] = [
   { key: 'usuarios', label: 'Usuarios' },
@@ -21,6 +22,7 @@ export const FEATURE_LIST: { key: FeatureKey; label: string }[] = [
   { key: 'crm', label: 'CRM' },
   { key: 'postventa', label: 'Postventa' },
   { key: 'multideposito', label: 'Multideposito' },
+  { key: 'integraciones', label: 'Integraciones (MercadoPago / MercadoLibre)' },
 ];
 
 export const FEATURE_LABELS: Record<FeatureKey, string> = FEATURE_LIST.reduce(

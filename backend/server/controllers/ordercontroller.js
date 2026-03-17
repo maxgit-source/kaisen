@@ -1,5 +1,6 @@
 const { query, withTransaction } = require('../db/pg');
 const PDFDocument = require('pdfkit');
+const logger = require('../lib/logger');
 const { body, validationResult } = require('express-validator');
 
 const validateCheckout = [
@@ -83,7 +84,7 @@ async function createOrder(req, res) {
 
     res.status(201).json(result);
   } catch (err) {
-    console.error('Error en checkout:', err.message);
+    logger.error({ err: err.message }, 'Error en checkout:');
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
     res.status(500).json({ error: 'No se pudo crear la orden' });
   }
@@ -101,7 +102,7 @@ async function listOrders(req, res) {
     );
     res.json(rows);
   } catch (err) {
-    console.error('Error al listar pedidos:', err.message);
+    logger.error({ err: err.message }, 'Error al listar pedidos:');
     res.status(500).json({ error: 'No se pudo obtener pedidos' });
   }
 }
@@ -146,7 +147,7 @@ async function orderPdf(req, res) {
     doc.moveDown(1).fontSize(14).text(`Total: $${order.total_amount.toFixed(2)}`, { align: 'right' });
     doc.end();
   } catch (err) {
-    console.error('Error al generar PDF:', err.message);
+    logger.error({ err: err.message }, 'Error al generar PDF:');
     res.status(500).json({ error: 'No se pudo generar el PDF' });
   }
 }
@@ -236,7 +237,7 @@ async function createOrderV2(req, res) {
 
     res.status(201).json(result);
   } catch (err) {
-    console.error('Checkout V2 error', err.message);
+    logger.error({ err: err.message }, 'Checkout V2 error');
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
     res.status(500).json({ error: 'No se pudo crear la orden' });
   }
@@ -254,7 +255,7 @@ async function listOrdersV2(req, res) {
     );
     res.json(rows);
   } catch (err) {
-    console.error('Error al listar pedidos V2:', err.message);
+    logger.error({ err: err.message }, 'Error al listar pedidos V2:');
     res.status(500).json({ error: 'No se pudo obtener pedidos' });
   }
 }

@@ -1,4 +1,4 @@
-const { query } = require('../../db/pg');
+const { query, withTransaction } = require('../../db/pg');
 const configRepo = require('./configRepository');
 
 const COMMISSION_MODE_KEY = 'comision_vendedores_modo';
@@ -12,6 +12,83 @@ const COMMISSION_KEYS = {
 function toNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeOfferProductIds(rawList = []) {
+  if (!Array.isArray(rawList)) return [];
+  return Array.from(
+    new Set(
+      rawList
+        .map((value) => Number(value))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  );
+}
+
+function extractOfferProductSelection(payload = {}, { requirePresence = false } = {}) {
+  const hasArray = Object.prototype.hasOwnProperty.call(payload, 'producto_ids');
+  const hasSingle = Object.prototype.hasOwnProperty.call(payload, 'producto_id');
+  if (requirePresence && !hasArray && !hasSingle) {
+    return { provided: false, ids: [] };
+  }
+  const raw = [];
+  if (Array.isArray(payload.producto_ids)) raw.push(...payload.producto_ids);
+  if (hasSingle && payload.producto_id != null && payload.producto_id !== '') {
+    raw.push(payload.producto_id);
+  }
+  return {
+    provided: hasArray || hasSingle || !requirePresence,
+    ids: normalizeOfferProductIds(raw),
+  };
+}
+
+async function replaceOfferProductsTx(client, offerId, productIds = []) {
+  const ids = normalizeOfferProductIds(productIds);
+  await client.query('DELETE FROM ofertas_precios_productos WHERE oferta_id = $1', [Number(offerId)]);
+  for (const productId of ids) {
+    await client.query(
+      `INSERT INTO ofertas_precios_productos(oferta_id, producto_id)
+       VALUES ($1, $2)`,
+      [Number(offerId), Number(productId)]
+    );
+  }
+}
+
+async function fetchOfferProductsByOfferIds(offerIds = []) {
+  const ids = Array.from(
+    new Set(
+      (offerIds || [])
+        .map((value) => Number(value))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  );
+  if (!ids.length) return new Map();
+  const marks = ids.map((_, idx) => `$${idx + 1}`).join(', ');
+  const { rows } = await query(
+    `SELECT op.oferta_id,
+            op.producto_id,
+            p.nombre AS producto_nombre
+       FROM ofertas_precios_productos op
+  LEFT JOIN productos p ON p.id = op.producto_id
+      WHERE op.oferta_id IN (${marks})
+      ORDER BY op.oferta_id ASC, op.producto_id ASC`,
+    ids
+  );
+
+  const out = new Map();
+  for (const row of rows || []) {
+    const offerId = Number(row.oferta_id);
+    const productId = Number(row.producto_id);
+    if (!Number.isInteger(offerId) || offerId <= 0) continue;
+    if (!Number.isInteger(productId) || productId <= 0) continue;
+    if (!out.has(offerId)) {
+      out.set(offerId, { ids: [], names: [] });
+    }
+    const entry = out.get(offerId);
+    if (!entry.ids.includes(productId)) entry.ids.push(productId);
+    if (row.producto_nombre) entry.names.push(String(row.producto_nombre));
+  }
+  return out;
 }
 
 async function listOffers({ incluirInactivas = false, q, tipo, producto_id, lista_precio_objetivo } = {}) {
@@ -34,7 +111,15 @@ async function listOffers({ incluirInactivas = false, q, tipo, producto_id, list
     const pid = Number(producto_id);
     if (Number.isInteger(pid) && pid > 0) {
       params.push(pid);
-      where.push(`o.producto_id = $${params.length}`);
+      where.push(
+        `(o.producto_id = $${params.length}
+          OR EXISTS (
+            SELECT 1
+              FROM ofertas_precios_productos opf
+             WHERE opf.oferta_id = o.id
+               AND opf.producto_id = $${params.length}
+          ))`
+      );
     }
   }
   if (lista_precio_objetivo) {
@@ -46,6 +131,7 @@ async function listOffers({ incluirInactivas = false, q, tipo, producto_id, list
     `SELECT o.id,
             o.nombre,
             o.descripcion,
+            o.packaging_image_url,
             o.tipo_oferta,
             o.producto_id,
             p.nombre AS producto_nombre,
@@ -64,13 +150,35 @@ async function listOffers({ incluirInactivas = false, q, tipo, producto_id, list
       ORDER BY o.activo DESC, o.prioridad DESC, o.id DESC`,
     params
   );
-  return rows;
+
+  let productsByOffer = new Map();
+  try {
+    productsByOffer = await fetchOfferProductsByOfferIds((rows || []).map((row) => row.id));
+  } catch {
+    productsByOffer = new Map();
+  }
+
+  return (rows || []).map((row) => {
+    const offerId = Number(row.id);
+    const mapped = productsByOffer.get(offerId);
+    const fallbackIds =
+      row.producto_id && Number.isInteger(Number(row.producto_id)) ? [Number(row.producto_id)] : [];
+    const fallbackNames = row.producto_nombre ? [String(row.producto_nombre)] : [];
+    const producto_ids = mapped?.ids?.length ? mapped.ids : fallbackIds;
+    const producto_nombres = mapped?.names?.length ? mapped.names : fallbackNames;
+    return {
+      ...row,
+      producto_ids,
+      producto_nombres,
+    };
+  });
 }
 
 async function createOffer(payload) {
   const {
     nombre,
     descripcion,
+    packaging_image_url,
     tipo_oferta,
     producto_id,
     lista_precio_objetivo,
@@ -81,27 +189,42 @@ async function createOffer(payload) {
     prioridad,
     activo,
   } = payload || {};
-  const { rows } = await query(
-    `INSERT INTO ofertas_precios(
-       nombre, descripcion, tipo_oferta, producto_id, lista_precio_objetivo, cantidad_minima,
-       descuento_pct, fecha_desde, fecha_hasta, prioridad, activo
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     RETURNING id`,
-    [
-      String(nombre || '').trim(),
-      descripcion ? String(descripcion).trim() : null,
-      String(tipo_oferta || '').trim().toLowerCase(),
-      producto_id ? Number(producto_id) : null,
-      String(lista_precio_objetivo || '').trim().toLowerCase() || 'todas',
-      Math.max(1, Math.trunc(Number(cantidad_minima || 1))),
-      toNumber(descuento_pct, 0),
-      fecha_desde || null,
-      fecha_hasta || null,
-      Math.trunc(Number(prioridad || 0)),
-      activo === false ? 0 : 1,
-    ]
-  );
-  return rows[0] || null;
+  const selection = extractOfferProductSelection(payload);
+  const primaryProductId =
+    selection.ids.length === 1
+      ? Number(selection.ids[0])
+      : producto_id
+      ? Number(producto_id)
+      : null;
+
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO ofertas_precios(
+         nombre, descripcion, packaging_image_url, tipo_oferta, producto_id, lista_precio_objetivo, cantidad_minima,
+         descuento_pct, fecha_desde, fecha_hasta, prioridad, activo
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       RETURNING id`,
+      [
+        String(nombre || '').trim(),
+        descripcion ? String(descripcion).trim() : null,
+        packaging_image_url ? String(packaging_image_url).trim() : null,
+        String(tipo_oferta || '').trim().toLowerCase(),
+        Number.isInteger(primaryProductId) && primaryProductId > 0 ? primaryProductId : null,
+        String(lista_precio_objetivo || '').trim().toLowerCase() || 'todas',
+        Math.max(1, Math.trunc(Number(cantidad_minima || 1))),
+        toNumber(descuento_pct, 0),
+        fecha_desde || null,
+        fecha_hasta || null,
+        Math.trunc(Number(prioridad || 0)),
+        activo === false ? 0 : 1,
+      ]
+    );
+    const created = rows[0] || null;
+    if (created?.id) {
+      await replaceOfferProductsTx(client, created.id, selection.ids);
+    }
+    return created;
+  });
 }
 
 async function updateOffer(id, payload) {
@@ -120,10 +243,28 @@ async function updateOffer(id, payload) {
   if (Object.prototype.hasOwnProperty.call(payload, 'descripcion')) {
     add('descripcion', payload.descripcion ? String(payload.descripcion).trim() : null);
   }
+  if (Object.prototype.hasOwnProperty.call(payload, 'packaging_image_url')) {
+    add(
+      'packaging_image_url',
+      payload.packaging_image_url ? String(payload.packaging_image_url).trim() : null
+    );
+  }
   if (Object.prototype.hasOwnProperty.call(payload, 'tipo_oferta')) {
     add('tipo_oferta', String(payload.tipo_oferta || '').trim().toLowerCase());
   }
-  if (Object.prototype.hasOwnProperty.call(payload, 'producto_id')) {
+  const selection = extractOfferProductSelection(payload, { requirePresence: true });
+  if (selection.provided) {
+    const primaryProductId =
+      selection.ids.length === 1
+        ? Number(selection.ids[0])
+        : payload.producto_id
+        ? Number(payload.producto_id)
+        : null;
+    add(
+      'producto_id',
+      Number.isInteger(primaryProductId) && primaryProductId > 0 ? primaryProductId : null
+    );
+  } else if (Object.prototype.hasOwnProperty.call(payload, 'producto_id')) {
     add('producto_id', payload.producto_id ? Number(payload.producto_id) : null);
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'lista_precio_objetivo')) {
@@ -151,17 +292,24 @@ async function updateOffer(id, payload) {
     add('activo', payload.activo ? 1 : 0);
   }
 
-  if (!sets.length) return { id };
-  sets.push('actualizado_en = CURRENT_TIMESTAMP');
-  params.push(id);
-  const { rows } = await query(
-    `UPDATE ofertas_precios
-        SET ${sets.join(', ')}
-      WHERE id = $${p}
-      RETURNING id`,
-    params
-  );
-  return rows[0] || null;
+  return withTransaction(async (client) => {
+    if (!sets.length) return { id };
+    sets.push('actualizado_en = CURRENT_TIMESTAMP');
+    params.push(id);
+    const { rows } = await client.query(
+      `UPDATE ofertas_precios
+          SET ${sets.join(', ')}
+        WHERE id = $${p}
+        RETURNING id`,
+      params
+    );
+    const updated = rows[0] || null;
+    if (!updated) return null;
+    if (selection.provided) {
+      await replaceOfferProductsTx(client, id, selection.ids);
+    }
+    return updated;
+  });
 }
 
 async function getCommissionConfig() {

@@ -6,7 +6,7 @@ import { BRAND } from '../config/branding';
 import TextInput from '../components/TextInput';
 import Spinner from '../components/Spinner';
 import Alert from '../components/Alert';
-import { login, setupAdmin, setupStatus } from '../lib/api';
+import { login, loginWithMfa, setupAdmin, setupStatus } from '../lib/api';
 import { clearApiBase, clearAppMode } from '../lib/storage';
 import Button from '../ui/Button';
 import AnimatedOrbs from '../ui/AnimatedOrbs';
@@ -23,6 +23,10 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaBackupCode, setMfaBackupCode] = useState('');
+  const [useBackupCode, setUseBackupCode] = useState(false);
 
   const [adminNombre, setAdminNombre] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -57,8 +61,13 @@ export default function LoginPage() {
   }, []);
 
   const canSubmit = useMemo(
-    () => email.trim().length > 0 && password.trim().length > 0 && !loading && !setupRequired,
-    [email, password, loading, setupRequired],
+    () => {
+      if (setupRequired || loading) return false;
+      if (!email.trim() || !password.trim()) return false;
+      if (!mfaRequired) return true;
+      return useBackupCode ? mfaBackupCode.trim().length >= 4 : mfaCode.trim().length >= 6;
+    },
+    [email, password, loading, mfaRequired, mfaCode, mfaBackupCode, setupRequired, useBackupCode],
   );
 
   const canSetupSubmit = useMemo(
@@ -78,10 +87,26 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const { accessToken, refreshToken } = await login(email.trim(), password);
+      const response = mfaRequired
+        ? await loginWithMfa(email.trim(), password, useBackupCode
+          ? { backup_code: mfaBackupCode.trim() }
+          : { totp_code: mfaCode.trim() })
+        : await login(email.trim(), password);
+      if (response.mfa_required) {
+        setMfaRequired(true);
+        setError('Ingresa el codigo de tu autenticador para continuar.');
+        return;
+      }
+      if (!response.accessToken || !response.refreshToken) {
+        throw new Error('La sesion no pudo completarse. Intenta nuevamente.');
+      }
+      const { accessToken, refreshToken } = response;
       setAuthTokens(accessToken, refreshToken, remember);
       navigate('/app', { replace: true });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.mfaRequired || err?.code === 'MFA_REQUIRED') {
+        setMfaRequired(true);
+      }
       setError(err instanceof Error ? err.message : 'No se pudo iniciar sesion');
     } finally {
       setLoading(false);
@@ -228,6 +253,57 @@ export default function LoginPage() {
                 labelClassName={labelClass}
               />
 
+              {mfaRequired && (
+                <div className="space-y-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-cyan-100">Segundo factor requerido</div>
+                      <div className="text-xs text-slate-400">
+                        Usa tu app autenticadora o un codigo de respaldo.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseBackupCode((current) => !current);
+                        setMfaCode('');
+                        setMfaBackupCode('');
+                      }}
+                      className="text-xs text-cyan-200 underline underline-offset-4"
+                    >
+                      {useBackupCode ? 'Usar codigo TOTP' : 'Usar codigo de respaldo'}
+                    </button>
+                  </div>
+
+                  {useBackupCode ? (
+                    <TextInput
+                      label="Codigo de respaldo"
+                      type="text"
+                      name="backup-code"
+                      autoComplete="one-time-code"
+                      value={mfaBackupCode}
+                      onChange={(e) => setMfaBackupCode(e.target.value)}
+                      placeholder="Ej: 1234-ABCD"
+                      className={inputClass}
+                      labelClassName={labelClass}
+                    />
+                  ) : (
+                    <TextInput
+                      label="Codigo de autenticacion"
+                      type="text"
+                      name="totp-code"
+                      autoComplete="one-time-code"
+                      inputMode="numeric"
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value.replace(/\s+/g, ''))}
+                      placeholder="000000"
+                      className={inputClass}
+                      labelClassName={labelClass}
+                    />
+                  )}
+                </div>
+              )}
+
               <label className="inline-flex items-center gap-2 select-none text-sm text-slate-300">
                 <input
                   type="checkbox"
@@ -239,7 +315,7 @@ export default function LoginPage() {
               </label>
 
               <Button type="submit" disabled={!canSubmit}>
-                {loading ? 'Ingresando...' : 'Ingresar'}
+                {loading ? 'Ingresando...' : mfaRequired ? 'Verificar e ingresar' : 'Ingresar'}
               </Button>
 
               {setupRequired && (
